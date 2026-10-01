@@ -52,7 +52,7 @@ ul{list-style:none;margin:0;padding:0}
 li{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:12px;padding:10px 12px;margin-bottom:8px}
 li .ic{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
 li .t{flex:1;min-width:0}li .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-li .t small{color:var(--mute)}
+li .t small{color:var(--mute);display:block}
 li button{background:none;border:0;color:var(--mute);font-size:18px;padding:6px}
 .empty{text-align:center;color:var(--mute);padding:26px 0}
 .fab{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));width:60px;height:60px;border-radius:50%;border:0;background:var(--acc);color:#fff;font-size:32px;box-shadow:0 4px 14px #0006}
@@ -112,9 +112,7 @@ input[type=checkbox]{width:auto}
       <div class="card"><small>Ausgaben</small><b class="out" id="sOut"></b></div>
     </div>
     <div class="card bal"><small>Saldo</small><b id="sBal"></b></div>
-    <button class="impbtn" id="impBtn">📸 Screenshot mit mehreren Buchungen importieren</button>
-    <input type="file" id="impFile" accept="image/*" multiple hidden>
-    <p class="scanmsg hidden" id="impMsg" role="status"></p>
+    <p class="scanmsg hidden" id="impMsg" role="status" style="margin-bottom:10px"></p>
     <div class="card" id="donutCard"><h2>Ausgaben nach Kategorie</h2><div class="donut" id="donut"></div></div>
     <div class="card"><h2>Letzte 6 Monate</h2><div class="bars" id="bars"></div></div>
     <div class="tabs">
@@ -178,6 +176,8 @@ input[type=checkbox]{width:auto}
     </div>
     <input type="file" id="fileCam" accept="image/*" capture="environment" hidden>
     <input type="file" id="fileGal" accept="image/*" hidden>
+    <button type="button" class="impbtn" id="impBtn" style="margin:0">📸 Screenshot mit mehreren Buchungen</button>
+    <input type="file" id="impFile" accept="image/*" multiple hidden>
     <p class="scanmsg hidden" id="scanMsg" role="status"></p>
     <input name="title" placeholder="Bezeichnung (z. B. Miete)" required maxlength="60">
     <input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="Betrag in €" required>
@@ -394,6 +394,9 @@ function openDlg(e, r) {
   else if (r) f.date.value = ymOf(new Date()) + '-' + pad(Math.min(r.day, 28));
   else { const t = new Date(); f.date.value = ymOf(cur) === ymOf(t) ? t.toISOString().slice(0,10) : ymOf(cur) + '-01'; }
   $('#scanMsg').classList.add('hidden');
+  const fresh = !e && !r && !recMode;
+  $('.scanrow').classList.toggle('hidden', !!e || !!r);
+  $('#impBtn').classList.toggle('hidden', !fresh);
   $('#dlg').showModal();
 }
 $('#add').onclick = () => openDlg();
@@ -625,6 +628,7 @@ for (const id of ['#fileCam', '#fileGal']) $(id).onchange = e => { const f = e.t
 /* Screenshot-Import: mehrere Buchungen auf einmal */
 const impSay = t => { const m = $('#impMsg'); m.textContent = t; m.classList.toggle('hidden', !t); };
 async function importScreenshots(files) {
+  $('#dlg').close(); view = 'month'; render();
   const btn = $('#impBtn'); btn.disabled = true;
   let rows = [], raw = '';
   try {
