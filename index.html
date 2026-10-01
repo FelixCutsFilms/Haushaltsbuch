@@ -75,6 +75,10 @@ input[type=checkbox]{width:auto}
 .foot{display:flex;gap:8px;margin-top:20px}
 .foot button{flex:1;padding:10px;border-radius:10px;border:1px solid var(--line);background:none;color:var(--mute);font-size:13px}
 .hint{color:var(--mute);font-size:13px;margin:0 0 12px}
+.scanrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.scanrow button{padding:11px 6px;border-radius:10px;border:1px dashed var(--acc);background:none;color:var(--acc);font-size:14px}
+.scanrow button:disabled{opacity:.5}
+.scanmsg{font-size:13px;color:var(--mute);margin:0}
 .hidden{display:none!important}
 </style>
 </head>
@@ -147,6 +151,13 @@ input[type=checkbox]{width:auto}
       <label><input type="radio" name="type" value="out" checked><span>Ausgabe</span></label>
       <label><input type="radio" name="type" value="in"><span>Einnahme</span></label>
     </div>
+    <div class="scanrow">
+      <button type="button" id="scanCam">📷 Beleg fotografieren</button>
+      <button type="button" id="scanGal">🖼️ Aus Galerie</button>
+    </div>
+    <input type="file" id="fileCam" accept="image/*" capture="environment" hidden>
+    <input type="file" id="fileGal" accept="image/*" hidden>
+    <p class="scanmsg hidden" id="scanMsg" role="status"></p>
     <input name="title" placeholder="Bezeichnung (z. B. Miete)" required maxlength="60">
     <input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="Betrag in €" required>
     <input name="date" type="date" required>
@@ -361,6 +372,7 @@ function openDlg(e, r) {
   if (e) f.date.value = e.date;
   else if (r) f.date.value = ymOf(new Date()) + '-' + pad(Math.min(r.day, 28));
   else { const t = new Date(); f.date.value = ymOf(cur) === ymOf(t) ? t.toISOString().slice(0,10) : ymOf(cur) + '-01'; }
+  $('#scanMsg').classList.add('hidden');
   $('#dlg').showModal();
 }
 $('#add').onclick = () => openDlg();
@@ -393,6 +405,95 @@ $('#form').onsubmit = ev => {
   }
   save(); render();
 };
+
+
+/* Beleg-Scan: OCR im Browser (Tesseract.js), Auswertung per Regeln */
+/*PARSE_START*/
+const STORE_KEYS = {
+  Lebensmittel: ['rewe','edeka','aldi','lidl','penny','netto','kaufland','real','norma','denn','alnatura','bäckerei','baeckerei','metzger','supermarkt','markt'],
+  Mobilität: ['shell','aral','esso','tankstelle','jet ','agip','bahn','ticket','parkhaus','parken','taxi','uber','bolt','tank'],
+  Gesundheit: ['apotheke','arzt','praxis','medikament','rossmann','dm-drogerie','dm drogerie'],
+  Freizeit: ['restaurant','café','cafe','gaststätte','pizzeria','kino','bar ','imbiss','burger','mcdonald','bistro','eis'],
+  Abos: ['netflix','spotify','abo','mitgliedschaft'],
+  Versicherung: ['versicherung'],
+  Miete: ['miete']
+};
+function parseAmount(str) {
+  const m = str.match(/(\d{1,3}(?:[.\s]\d{3})+|\d+)[,.](\d{2})(?!\d)/g);
+  if (!m) return [];
+  return m.map(x => { const mm = x.match(/(.*)[,.](\d{2})$/); return parseFloat(mm[1].replace(/[.\s]/g, '') + '.' + mm[2]); }).filter(n => n > 0 && n < 100000);
+}
+function parseReceipt(text, outCats) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const skip = /mwst|mw\.st|ust|steuer|netto\s*\d|rückgeld|rueckgeld|gegeben|zurück|pfand/i;
+  const key = /summe|gesamt|total|zu zahlen|zahlbetrag|endbetrag|betrag/i;
+  const prio = [], rest = [];
+  for (const l of lines) {
+    if (skip.test(l)) continue;
+    const a = parseAmount(l);
+    if (!a.length) continue;
+    (key.test(l) && !/zwischen/i.test(l) ? prio : rest).push(a[a.length - 1]);
+  }
+  const amount = prio.length ? Math.max(...prio) : (rest.length ? Math.max(...rest) : null);
+  let date = null;
+  for (const l of lines) {
+    const m = l.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4}|\d{2})(?!\d)/);
+    if (!m) continue;
+    const d = +m[1], mo = +m[2]; let y = +m[3]; if (y < 100) y += 2000;
+    if (d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && y >= 2000 && y <= 2100) { date = y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0'); break; }
+  }
+  const t = lines.find(l => (l.match(/\p{L}/gu) || []).length >= 3);
+  const title = t ? t.replace(/^[^\p{L}\d]+/u, '').slice(0, 40) : '';
+  const low = text.toLowerCase();
+  let cat = null;
+  for (const c of outCats) if (c.length >= 3 && low.includes(c.toLowerCase())) { cat = c; break; }
+  if (!cat) for (const [name, words] of Object.entries(STORE_KEYS)) {
+    if (outCats.includes(name) && words.some(w => low.includes(w))) { cat = name; break; }
+  }
+  return { amount, date, title, cat };
+}
+/*PARSE_END*/
+
+let tessLoading = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (!tessLoading) tessLoading = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = res; s.onerror = () => { tessLoading = null; rej(new Error('Texterkennung konnte nicht geladen werden (Internet?)')); };
+    document.head.append(s);
+  });
+  return tessLoading;
+}
+async function prepImage(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
+  const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext('2d'); ctx.filter = 'grayscale(1) contrast(1.4)'; ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+}
+async function scanReceipt(file) {
+  const msg = $('#scanMsg'), btns = [$('#scanCam'), $('#scanGal')];
+  const say = t => { msg.textContent = t; msg.classList.remove('hidden'); };
+  btns.forEach(b => b.disabled = true);
+  try {
+    say('Lade Texterkennung …'); await loadTesseract();
+    say('Bereite Bild vor …'); const img = await prepImage(file);
+    const { data } = await Tesseract.recognize(img, 'deu', { logger: m => { if (m.status === 'recognizing text') say('Lese Beleg … ' + Math.round(m.progress * 100) + ' %'); } });
+    const f = $('#form');
+    f.type.value = 'out'; fillCats('out');
+    const r = parseReceipt(data.text, db.cats.out.map(c => c.name));
+    if (r.title && !f.title.value.trim()) f.title.value = r.title;
+    if (r.amount) f.amount.value = r.amount.toFixed(2);
+    if (r.date) f.date.value = r.date;
+    if (r.cat) f.cat.value = r.cat;
+    say(r.amount ? 'Erkannt: ' + eur(r.amount) + (r.cat ? ' · ' + r.cat : '') + ' – bitte kurz prüfen und speichern.' : 'Betrag nicht erkannt – bitte von Hand eintragen (Foto gerade und gut beleuchtet versuchen).');
+  } catch (e) { say('Scan fehlgeschlagen: ' + (e.message || e)); }
+  btns.forEach(b => b.disabled = false);
+}
+$('#scanCam').onclick = () => $('#fileCam').click();
+$('#scanGal').onclick = () => $('#fileGal').click();
+for (const id of ['#fileCam', '#fileGal']) $(id).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) scanReceipt(f); };
 
 /* Navigation */
 const maxMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 12); return ymOf(d); };
