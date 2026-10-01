@@ -79,6 +79,16 @@ input[type=checkbox]{width:auto}
 .scanrow button{padding:11px 6px;border-radius:10px;border:1px dashed var(--acc);background:none;color:var(--acc);font-size:14px}
 .scanrow button:disabled{opacity:.5}
 .scanmsg{font-size:13px;color:var(--mute);margin:0}
+.impbtn{width:100%;padding:12px;border-radius:12px;border:1px dashed var(--acc);background:none;color:var(--acc);font-size:15px;margin-bottom:6px}
+.impbtn:disabled{opacity:.5}
+#impDlg{width:min(94vw,460px);max-height:90vh;overflow:auto}
+#impDlg>.row{position:sticky;bottom:-18px;background:var(--card);padding:10px 0 2px}
+.improw{border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px;display:grid;gap:6px}
+.improw.off{opacity:.45}
+.improw .two{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.improw input,.improw select{padding:9px;font-size:15px}
+.improw .chk b{margin-left:auto}
+.improw .dupl{color:#f59e0b;font-size:12px}
 .hidden{display:none!important}
 </style>
 </head>
@@ -102,6 +112,9 @@ input[type=checkbox]{width:auto}
       <div class="card"><small>Ausgaben</small><b class="out" id="sOut"></b></div>
     </div>
     <div class="card bal"><small>Saldo</small><b id="sBal"></b></div>
+    <button class="impbtn" id="impBtn">📸 Screenshot mit mehreren Buchungen importieren</button>
+    <input type="file" id="impFile" accept="image/*" multiple hidden>
+    <p class="scanmsg hidden" id="impMsg" role="status"></p>
     <div class="card" id="donutCard"><h2>Ausgaben nach Kategorie</h2><div class="donut" id="donut"></div></div>
     <div class="card"><h2>Letzte 6 Monate</h2><div class="bars" id="bars"></div></div>
     <div class="tabs">
@@ -144,6 +157,13 @@ input[type=checkbox]{width:auto}
   </section>
 </div>
 <button class="fab" id="add" aria-label="Neuer Eintrag">+</button>
+
+<dialog id="impDlg">
+  <h2 style="font-size:17px;margin:0 0 4px">Gefundene Buchungen</h2>
+  <p class="hint" id="impHint"></p>
+  <div id="impList"></div>
+  <div class="row"><button type="button" class="no" id="impCancel">Abbrechen</button><button type="button" class="ok" id="impSave">Speichern</button></div>
+</dialog>
 
 <dialog id="dlg">
   <form id="form" method="dialog">
@@ -410,13 +430,14 @@ $('#form').onsubmit = ev => {
 /* Beleg-Scan: OCR im Browser (Tesseract.js), Auswertung per Regeln */
 /*PARSE_START*/
 const STORE_KEYS = {
-  Lebensmittel: ['rewe','edeka','aldi','lidl','penny','netto','kaufland','real','norma','denn','alnatura','bäckerei','baeckerei','metzger','supermarkt','markt'],
+  Lebensmittel: ['rewe','edeka','aldi','lidl','penny','netto','kaufland','real','norma','denn','alnatura','bäckerei','baeckerei','bäcker','konsum','hit ','globus','metzger','supermarkt','markt'],
   Mobilität: ['shell','aral','esso','tankstelle','jet ','agip','bahn','ticket','parkhaus','parken','taxi','uber','bolt','tank'],
   Gesundheit: ['apotheke','arzt','praxis','medikament','rossmann','dm-drogerie','dm drogerie'],
   Freizeit: ['restaurant','café','cafe','gaststätte','pizzeria','kino','bar ','imbiss','burger','mcdonald','bistro','eis'],
   Abos: ['netflix','spotify','abo','mitgliedschaft'],
   Versicherung: ['versicherung'],
-  Miete: ['miete']
+  Miete: ['miete'],
+  Gehalt: ['gehalt','lohn','salary']
 };
 function parseAmount(str) {
   const m = str.match(/(\d{1,3}(?:[.\s]\d{3})+|\d+)[,.](\d{2})(?!\d)/g);
@@ -444,13 +465,45 @@ function parseReceipt(text, outCats) {
   }
   const t = lines.find(l => (l.match(/\p{L}/gu) || []).length >= 3);
   const title = t ? t.replace(/^[^\p{L}\d]+/u, '').slice(0, 40) : '';
+  return { amount, date, title, cat: guessCat(text, outCats) };
+}
+function guessCat(text, names) {
   const low = text.toLowerCase();
-  let cat = null;
-  for (const c of outCats) if (c.length >= 3 && low.includes(c.toLowerCase())) { cat = c; break; }
-  if (!cat) for (const [name, words] of Object.entries(STORE_KEYS)) {
-    if (outCats.includes(name) && words.some(w => low.includes(w))) { cat = name; break; }
-  }
-  return { amount, date, title, cat };
+  for (const c of names) if (c.length >= 3 && low.includes(c.toLowerCase())) return c;
+  for (const [name, words] of Object.entries(STORE_KEYS)) if (names.includes(name) && words.some(w => low.includes(w))) return name;
+  return null;
+}
+const AMT_END = /([−–—+~-])?\s?(\d{1,3}(?:[. ]\d{3})*|\d+),(\d{2})\s?(?:€|EUR)?[\s|>)\].]*$/;
+const DATE_ANY = /(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?!\d)/;
+const META = /vorgemerkt|kartenzahlung|lastschrift|überweisung|ueberweisung|gutschrift|dauerauftrag|umsatz/i;
+function isoOf(m) {
+  const d = +m[1], mo = +m[2]; let y = +m[3]; if (y < 100) y += 2000;
+  return d >= 1 && d <= 31 && mo >= 1 && mo <= 12 ? y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0') : null;
+}
+/* Liste aus Bank-Screenshot: Zeilen mit Betrag am Zeilenende = eine Buchung */
+function parseList(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const hits = [];
+  lines.forEach((l, i) => { const m = l.match(AMT_END); if (m && !/^\d{1,2}\.\d{1,2}\./.test(l)) hits.push({ i, m }); });
+  const rows = []; let lastDate = null;
+  hits.forEach((h, k) => {
+    const l = lines[h.i], end = k + 1 < hits.length ? hits[k + 1].i : lines.length;
+    const hasLetters = s => (s.match(/\p{L}/gu) || []).length >= 2;
+    let name = l.slice(0, h.m.index).trim();
+    if (!hasLetters(name) || META.test(name)) {
+      name = '';
+      for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1); j--) if (hasLetters(lines[j]) && !META.test(lines[j]) && !DATE_ANY.test(lines[j])) { name = lines[j]; break; }
+    }
+    name = name.replace(/^[^\p{L}\d]+/u, '').replace(/[\s·|>\-–−]+$/u, '').replace(/^(\p{L}+)\s+\1\b/iu, '$1').slice(0, 40);
+    let date = null;
+    for (let j = h.i; j < end && !date; j++) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
+    for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1) && !date; j--) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
+    if (date) lastDate = date; else date = lastDate;
+    const sign = h.m[1], amount = parseFloat(h.m[2].replace(/[. ]/g, '') + '.' + h.m[3]);
+    if (!name || !(amount > 0)) return;
+    rows.push({ title: name, amount, type: sign === '+' ? 'in' : 'out', date });
+  });
+  return rows;
 }
 /*PARSE_END*/
 
@@ -467,9 +520,15 @@ function loadTesseract() {
 }
 async function prepImage(file) {
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
-  const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const k = Math.min(2, 2400 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
-  const ctx = c.getContext('2d'); ctx.filter = 'grayscale(1) contrast(1.4)'; ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const id = ctx.getImageData(0, 0, c.width, c.height), d = id.data, n = d.length / 4, g = new Uint8ClampedArray(n);
+  let sum = 0;
+  for (let p = 0; p < n; p++) { g[p] = .299 * d[4*p] + .587 * d[4*p+1] + .114 * d[4*p+2]; sum += g[p]; }
+  const dark = sum / n < 110;
+  for (let p = 0; p < n; p++) { let v = dark ? 255 - g[p] : g[p]; v = (v - 128) * 1.4 + 128; d[4*p] = d[4*p+1] = d[4*p+2] = v; d[4*p+3] = 255; }
+  ctx.putImageData(id, 0, 0);
   return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
 }
 async function scanReceipt(file) {
@@ -494,6 +553,80 @@ async function scanReceipt(file) {
 $('#scanCam').onclick = () => $('#fileCam').click();
 $('#scanGal').onclick = () => $('#fileGal').click();
 for (const id of ['#fileCam', '#fileGal']) $(id).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) scanReceipt(f); };
+
+
+/* Screenshot-Import: mehrere Buchungen auf einmal */
+const impSay = t => { const m = $('#impMsg'); m.textContent = t; m.classList.toggle('hidden', !t); };
+async function importScreenshots(files) {
+  const btn = $('#impBtn'); btn.disabled = true;
+  let rows = [];
+  try {
+    impSay('Lade Texterkennung …'); await loadTesseract();
+    let cur_i = 0;
+    const w = await Tesseract.createWorker('deu', 1, { logger: m => { if (m.status === 'recognizing text') impSay('Lese Bild ' + cur_i + '/' + files.length + ' … ' + Math.round(m.progress * 100) + ' %'); } });
+    await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+    for (const f of files) {
+      cur_i++; impSay('Bereite Bild ' + cur_i + '/' + files.length + ' vor …');
+      const { data } = await w.recognize(await prepImage(f));
+      rows.push(...parseList(data.text));
+    }
+    await w.terminate();
+    if (!rows.length) { impSay('Keine Buchungen erkannt. Bitte einen Screenshot mit Betrag am Zeilenende (z. B. „−5,65 €“) versuchen.'); }
+    else { impSay(''); openImport(rows); }
+  } catch (e) { impSay('Import fehlgeschlagen: ' + (e.message || e)); }
+  btn.disabled = false;
+}
+let impRefs = [];
+function fillSel(sel, type, val) {
+  sel.innerHTML = '';
+  db.cats[type].forEach(c => sel.add(new Option(c.icon + ' ' + c.name, c.name)));
+  if (val && !db.cats[type].some(c => c.name === val)) sel.add(new Option(val, val));
+  if (val) sel.value = val;
+}
+function guessFor(r) {
+  const known = db.entries.find(e => e.type === r.type && e.title.toLowerCase() === r.title.toLowerCase());
+  if (known) return known.cat;
+  const names = db.cats[r.type].map(c => c.name);
+  return guessCat(r.title, names) || (names.includes('Sonstiges') ? 'Sonstiges' : names[0]);
+}
+function openImport(rows) {
+  const box = $('#impList'); box.innerHTML = ''; impRefs = [];
+  const today = new Date().toISOString().slice(0, 10), seen = new Set();
+  for (const r of rows) {
+    const date = r.date || today, key = [date, r.amount, r.title.toLowerCase()].join('|');
+    const dup = seen.has(key) || db.entries.some(e => e.date === date && Math.abs(e.amount - r.amount) < .005 && e.title.toLowerCase() === r.title.toLowerCase());
+    seen.add(key);
+    const d = document.createElement('div'); d.className = 'improw';
+    d.innerHTML = '<label class="chk"><input type="checkbox" class="c"><span class="dupl"></span><b class="amtl"></b></label><input class="t" maxlength="60" aria-label="Bezeichnung"><div class="two"><input class="a" type="number" step="0.01" min="0.01" aria-label="Betrag"><input class="d" type="date" aria-label="Datum"></div><div class="two"><select class="ty"><option value="out">Ausgabe</option><option value="in">Einnahme</option></select><select class="ca"></select></div>';
+    const q = s => d.querySelector(s);
+    q('.t').value = r.title; q('.a').value = r.amount.toFixed(2); q('.d').value = date; q('.ty').value = r.type;
+    fillSel(q('.ca'), r.type, guessFor(r));
+    q('.c').checked = !dup; d.classList.toggle('off', dup); q('.dupl').textContent = dup ? 'Schon vorhanden · ' : '';
+    const upd = () => { q('.amtl').className = 'amtl ' + q('.ty').value; q('.amtl').textContent = (q('.ty').value === 'in' ? '+' : '−') + eur(parseFloat(q('.a').value) || 0); d.classList.toggle('off', !q('.c').checked); count(); };
+    q('.ty').onchange = () => { fillSel(q('.ca'), q('.ty').value, guessFor({ type: q('.ty').value, title: q('.t').value })); upd(); };
+    q('.c').onchange = upd; q('.a').oninput = upd;
+    box.append(d); impRefs.push({ d, q }); upd();
+  }
+  $('#impHint').textContent = rows.length + ' Positionen erkannt. Bitte prüfen, korrigieren oder abhaken, was nicht dazugehört.';
+  count(); $('#impDlg').showModal();
+}
+function count() { const n = impRefs.filter(x => x.q('.c').checked).length; $('#impSave').textContent = n + ' speichern'; $('#impSave').disabled = !n; }
+$('#impBtn').onclick = () => $('#impFile').click();
+$('#impFile').onchange = e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importScreenshots(fs); };
+$('#impCancel').onclick = () => $('#impDlg').close();
+$('#impSave').onclick = () => {
+  let latest = '';
+  for (const { q } of impRefs) {
+    if (!q('.c').checked) continue;
+    const amount = Math.round(parseFloat(q('.a').value) * 100) / 100, title = q('.t').value.trim(), date = q('.d').value;
+    if (!title || !(amount > 0) || !date) continue;
+    db.entries.push({ id: uid(), type: q('.ty').value, title, amount, cat: q('.ca').value, date });
+    if (date > latest) latest = date;
+  }
+  save(); $('#impDlg').close();
+  if (latest) cur = new Date(+latest.slice(0, 4), +latest.slice(5, 7) - 1, 1);
+  render();
+};
 
 /* Navigation */
 const maxMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 12); return ymOf(d); };
