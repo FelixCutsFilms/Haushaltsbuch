@@ -161,6 +161,7 @@ input[type=checkbox]{width:auto}
 <dialog id="impDlg">
   <h2 style="font-size:17px;margin:0 0 4px">Gefundene Buchungen</h2>
   <p class="hint" id="impHint"></p>
+  <details style="margin-bottom:10px"><summary class="hint" style="cursor:pointer">Erkannten Rohtext anzeigen</summary><pre id="impRaw" style="white-space:pre-wrap;font-size:12px;color:var(--mute)"></pre></details>
   <div id="impList"></div>
   <div class="row"><button type="button" class="no" id="impCancel">Abbrechen</button><button type="button" class="ok" id="impSave">Speichern</button></div>
 </dialog>
@@ -474,34 +475,97 @@ function guessCat(text, names) {
   return null;
 }
 const AMT_END = /([−–—+~-])?\s?(\d{1,3}(?:[. ]\d{3})*|\d+),(\d{2})\s?(?:€|EUR)?[\s|>)\].]*$/;
+const AMT_NOCOMMA = /([−–—+~-])\s?(\d{3,6})\s?€[\s|>)\].]*$/;
 const DATE_ANY = /(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?!\d)/;
 const META = /vorgemerkt|kartenzahlung|lastschrift|überweisung|ueberweisung|gutschrift|dauerauftrag|umsatz/i;
 function isoOf(m) {
   const d = +m[1], mo = +m[2]; let y = +m[3]; if (y < 100) y += 2000;
   return d >= 1 && d <= 31 && mo >= 1 && mo <= 12 ? y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0') : null;
 }
+/* Logo-Müll, Status- und Datumstexte aus einem Namen entfernen */
+const KEEP_SHORT = ['dm', 'tk', 'hm', 'h&m'];
+function cleanName(raw) {
+  let t = raw.replace(DATE_ANY, ' ').replace(new RegExp(META.source, 'gi'), ' ').replace(/\bSUM\b/g, ' ').replace(/\s+/g, ' ').trim();
+  let toks = t.split(' ');
+  const letters = x => (x.match(/\p{L}/gu) || []).length;
+  for (;;) {
+    const f = toks[0];
+    if (toks.length < 2 || f === undefined) break;
+    const lowF = f.toLowerCase();
+    const junk = !/[\p{L}\d]/u.test(f) || /[\[\]()@©|=]/.test(f) || /^\d+$/.test(f) || [...f].length === 1
+      || (f.length <= 4 && /^[\p{L}\d]+-[\p{L}\d]+$/u.test(f) && /\d/.test(f)) || (f.length <= 4 && /^\d\p{L}+$/u.test(f))
+      || (/^\p{Ll}{1,4}$/u.test(f) && !KEEP_SHORT.includes(lowF) && /^\p{Lu}/u.test(toks[1]));
+    if (!junk) break;
+    toks.shift();
+  }
+  t = toks.join(' ').replace(/^[^\p{L}\d]+/u, '').replace(/[\s·|>\-–−_]+$/u, '').replace(/^(\p{L}+)\s+\1\b/iu, '$1');
+  return t.slice(0, 40);
+}
+function lev(a, b) {
+  const m = [...Array(a.length + 1)].map((_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) m[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) m[i][j] = Math.min(m[i-1][j] + 1, m[i][j-1] + 1, m[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return m[a.length][b.length];
+}
+/* Schreibweise an bekannte Titel angleichen (kleine OCR-Fehler) */
+function snapTitle(t, known) {
+  const l = t.toLowerCase();
+  let best = null, bd = 99;
+  for (const k of known) { const kl = k.toLowerCase(), d = lev(l, kl); if (d < bd && d <= (kl.length >= 8 ? 2 : 1)) { bd = d; best = k; } }
+  return best || t;
+}
+/* Ergebnisse mehrerer OCR-Durchgänge zusammenführen: Mehrheit entscheidet */
+function mergeRows(passes) {
+  const norm = t => t.toLowerCase().replace(/[^\p{L}\d]/gu, '');
+  const groups = [];
+  for (const rows of passes) {
+    const used = new Set();
+    for (const [ri, r] of rows.entries()) {
+      r.idx = ri;
+      const n = norm(r.title);
+      let g = groups.find(g => !used.has(g) && lev(n, g.n) <= Math.max(1, Math.floor(Math.max(n.length, g.n.length) / 5)) && (!r.date || !g.date || r.date === g.date));
+      if (!g) g = groups.find(g => !used.has(g) && Math.min(n.length, g.n.length) >= 4 && (n.includes(g.n) || g.n.includes(n)) && (!r.date || !g.date || r.date === g.date));
+      if (!g) { g = { n, date: r.date, items: [] }; groups.push(g); }
+      used.add(g); g.items.push(r); if (!g.date) g.date = r.date;
+    }
+  }
+  const vote = (arr, f) => { const c = new Map(); arr.forEach(x => c.set(f(x), (c.get(f(x)) || 0) + 1)); let b = null, bc = 0; for (const [k, v] of c) if (v > bc) { b = k; bc = v; } return [b, bc]; };
+  groups.sort((a, b) => a.items.reduce((s, r) => s + r.idx, 0) / a.items.length - b.items.reduce((s, r) => s + r.idx, 0) / b.items.length);
+  return groups.map(g => {
+    const [amount, ac] = vote(g.items, r => r.amount);
+    const [type] = vote(g.items, r => r.type);
+    const tc = new Map(); g.items.forEach(r => tc.set(r.title, (tc.get(r.title) || 0) + 1));
+    const title = [...tc.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
+    const [date] = vote(g.items.filter(r => r.date), r => r.date);
+    return { title, amount, type, date: date || g.date, uncertain: passes.length > 1 && ac < 2 };
+  }).filter(r => r.amount > 0);
+}
 /* Liste aus Bank-Screenshot: Zeilen mit Betrag am Zeilenende = eine Buchung */
 function parseList(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const hits = [];
-  lines.forEach((l, i) => { const m = l.match(AMT_END); if (m && !/^\d{1,2}\.\d{1,2}\./.test(l)) hits.push({ i, m }); });
+  lines.forEach((l, i) => {
+    if (/^\d{1,2}\.\d{1,2}\./.test(l)) return;
+    let m = l.match(AMT_END);
+    if (!m) { const n = l.match(AMT_NOCOMMA); if (n) m = Object.assign([n[0], n[1], n[2].slice(0, -2), n[2].slice(-2)], { index: n.index }); }
+    if (m) hits.push({ i, m });
+  });
   const rows = []; let lastDate = null;
   hits.forEach((h, k) => {
     const l = lines[h.i], end = k + 1 < hits.length ? hits[k + 1].i : lines.length;
     const hasLetters = s => (s.match(/\p{L}/gu) || []).length >= 2;
-    let name = l.slice(0, h.m.index).trim();
-    if (!hasLetters(name) || META.test(name)) {
+    let name = cleanName(l.slice(0, h.m.index));
+    if (!hasLetters(name)) {
       name = '';
-      for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1); j--) if (hasLetters(lines[j]) && !META.test(lines[j]) && !DATE_ANY.test(lines[j])) { name = lines[j]; break; }
+      for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1); j--) { const c = cleanName(lines[j]); if (hasLetters(c)) { name = c; break; } }
     }
-    name = name.replace(/^[^\p{L}\d]+/u, '').replace(/[\s·|>\-–−]+$/u, '').replace(/^(\p{L}+)\s+\1\b/iu, '$1').slice(0, 40);
     let date = null;
     for (let j = h.i; j < end && !date; j++) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
     for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1) && !date; j--) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
     if (date) lastDate = date; else date = lastDate;
     const sign = h.m[1], amount = parseFloat(h.m[2].replace(/[. ]/g, '') + '.' + h.m[3]);
-    if (!name || !(amount > 0)) return;
-    rows.push({ title: name, amount, type: sign === '+' ? 'in' : 'out', date });
+    if (!(amount > 0)) return;
+    rows.push({ title: name || 'Unbekannt', amount, type: sign === '+' ? 'in' : 'out', date });
   });
   return rows;
 }
@@ -518,18 +582,21 @@ function loadTesseract() {
   });
   return tessLoading;
 }
-async function prepImage(file) {
+async function prepImage(file, o) {
+  o = o || {};
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
-  const k = Math.min(2, 2400 / Math.max(bmp.width, bmp.height));
+  const k = Math.min(o.scale || 1, 2400 / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
   const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0, c.width, c.height);
-  const id = ctx.getImageData(0, 0, c.width, c.height), d = id.data, n = d.length / 4, g = new Uint8ClampedArray(n);
-  let sum = 0;
-  for (let p = 0; p < n; p++) { g[p] = .299 * d[4*p] + .587 * d[4*p+1] + .114 * d[4*p+2]; sum += g[p]; }
-  const dark = sum / n < 110;
-  for (let p = 0; p < n; p++) { let v = dark ? 255 - g[p] : g[p]; v = (v - 128) * 1.4 + 128; d[4*p] = d[4*p+1] = d[4*p+2] = v; d[4*p+3] = 255; }
-  ctx.putImageData(id, 0, 0);
-  return new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+  if (!o.raw) {
+    const id = ctx.getImageData(0, 0, c.width, c.height), d = id.data, n = d.length / 4, g = new Uint8ClampedArray(n);
+    let sum = 0;
+    for (let p = 0; p < n; p++) { g[p] = .299 * d[4*p] + .587 * d[4*p+1] + .114 * d[4*p+2]; sum += g[p]; }
+    const dark = sum / n < 110;
+    for (let p = 0; p < n; p++) { let v = dark ? 255 - g[p] : g[p]; if (o.boost && !dark) v = (v - 128) * 1.4 + 128; d[4*p] = d[4*p+1] = d[4*p+2] = v; d[4*p+3] = 255; }
+    ctx.putImageData(id, 0, 0);
+  }
+  return new Promise(r => c.toBlob(r, 'image/png'));
 }
 async function scanReceipt(file) {
   const msg = $('#scanMsg'), btns = [$('#scanCam'), $('#scanGal')];
@@ -537,7 +604,7 @@ async function scanReceipt(file) {
   btns.forEach(b => b.disabled = true);
   try {
     say('Lade Texterkennung …'); await loadTesseract();
-    say('Bereite Bild vor …'); const img = await prepImage(file);
+    say('Bereite Bild vor …'); const img = await prepImage(file, { boost: true });
     const { data } = await Tesseract.recognize(img, 'deu', { logger: m => { if (m.status === 'recognizing text') say('Lese Beleg … ' + Math.round(m.progress * 100) + ' %'); } });
     const f = $('#form');
     f.type.value = 'out'; fillCats('out');
@@ -559,19 +626,26 @@ for (const id of ['#fileCam', '#fileGal']) $(id).onchange = e => { const f = e.t
 const impSay = t => { const m = $('#impMsg'); m.textContent = t; m.classList.toggle('hidden', !t); };
 async function importScreenshots(files) {
   const btn = $('#impBtn'); btn.disabled = true;
-  let rows = [];
+  let rows = [], raw = '';
   try {
     impSay('Lade Texterkennung …'); await loadTesseract();
     let cur_i = 0;
-    const w = await Tesseract.createWorker('deu', 1, { logger: m => { if (m.status === 'recognizing text') impSay('Lese Bild ' + cur_i + '/' + files.length + ' … ' + Math.round(m.progress * 100) + ' %'); } });
+    const w = await Tesseract.createWorker('deu', 1, { logger: () => {} });
     await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+    const PASSES = [{ scale: 1 }, { raw: true }, { scale: 1.25 }];
     for (const f of files) {
-      cur_i++; impSay('Bereite Bild ' + cur_i + '/' + files.length + ' vor …');
-      const { data } = await w.recognize(await prepImage(f));
-      rows.push(...parseList(data.text));
+      cur_i++;
+      const passes = [];
+      for (let pi = 0; pi < PASSES.length; pi++) {
+        impSay('Bild ' + cur_i + '/' + files.length + ' · Durchgang ' + (pi + 1) + '/' + PASSES.length + ' …');
+        const { data } = await w.recognize(await prepImage(f, PASSES[pi]));
+        raw += '--- Durchgang ' + (pi + 1) + '\n' + data.text + '\n'; passes.push(parseList(data.text));
+      }
+      rows.push(...mergeRows(passes));
     }
     await w.terminate();
-    if (!rows.length) { impSay('Keine Buchungen erkannt. Bitte einen Screenshot mit Betrag am Zeilenende (z. B. „−5,65 €“) versuchen.'); }
+    $('#impRaw').textContent = raw;
+    if (!rows.length) { impSay('Keine Buchungen erkannt. Bitte einen Screenshot mit Betrag am Zeilenende (z. B. „−5,65 €“) versuchen. Erkannter Text: ' + raw.replace(/\s+/g, ' ').slice(0, 200)); }
     else { impSay(''); openImport(rows); }
   } catch (e) { impSay('Import fehlgeschlagen: ' + (e.message || e)); }
   btn.disabled = false;
@@ -591,8 +665,9 @@ function guessFor(r) {
 }
 function openImport(rows) {
   const box = $('#impList'); box.innerHTML = ''; impRefs = [];
-  const today = new Date().toISOString().slice(0, 10), seen = new Set();
+  const today = new Date().toISOString().slice(0, 10), seen = new Set(), known = [...new Set(db.entries.map(e => e.title))];
   for (const r of rows) {
+    r.title = snapTitle(r.title, known);
     const date = r.date || today, key = [date, r.amount, r.title.toLowerCase()].join('|');
     const dup = seen.has(key) || db.entries.some(e => e.date === date && Math.abs(e.amount - r.amount) < .005 && e.title.toLowerCase() === r.title.toLowerCase());
     seen.add(key);
@@ -601,7 +676,7 @@ function openImport(rows) {
     const q = s => d.querySelector(s);
     q('.t').value = r.title; q('.a').value = r.amount.toFixed(2); q('.d').value = date; q('.ty').value = r.type;
     fillSel(q('.ca'), r.type, guessFor(r));
-    q('.c').checked = !dup; d.classList.toggle('off', dup); q('.dupl').textContent = dup ? 'Schon vorhanden · ' : '';
+    q('.c').checked = !dup; d.classList.toggle('off', dup); q('.dupl').textContent = dup ? 'Schon vorhanden · ' : (r.uncertain ? '⚠ bitte prüfen · ' : '');
     const upd = () => { q('.amtl').className = 'amtl ' + q('.ty').value; q('.amtl').textContent = (q('.ty').value === 'in' ? '+' : '−') + eur(parseFloat(q('.a').value) || 0); d.classList.toggle('off', !q('.c').checked); count(); };
     q('.ty').onchange = () => { fillSel(q('.ca'), q('.ty').value, guessFor({ type: q('.ty').value, title: q('.t').value })); upd(); };
     q('.c').onchange = upd; q('.a').oninput = upd;
