@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>Haushaltsbuch</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--text:#f1f5f9;--mute:#94a3b8;--in:#22c55e;--out:#ef4444;--acc:#3b82f6;--line:#334155}
+@media (prefers-color-scheme:light){:root{--bg:#f1f5f9;--card:#fff;--text:#0f172a;--mute:#64748b;--line:#e2e8f0}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,sans-serif;padding:max(16px,env(safe-area-inset-top)) 16px 110px}
+.wrap{max-width:560px;margin:0 auto}
+button{font:inherit;color:inherit}
+.nav{display:flex;gap:6px;margin-bottom:14px;background:var(--card);padding:4px;border-radius:12px}
+.nav button{flex:1;padding:9px 4px;border:0;border-radius:9px;background:none;color:var(--mute);font-size:14px}
+.nav button.on{background:var(--acc);color:#fff}
+.month{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.month button{background:var(--card);border:0;border-radius:10px;width:44px;height:44px;font-size:20px}
+.month h1{font-size:20px;margin:0}
+.sum{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:12px}
+.sum .card{margin:0}
+.card small{color:var(--mute);display:block}
+.card b{font-size:20px}
+.card h2{font-size:15px;margin:0 0 10px;color:var(--mute);font-weight:600}
+.in{color:var(--in)}.out{color:var(--out)}
+.bal{text-align:center}.bal b{font-size:30px}
+.donut{display:flex;gap:14px;align-items:center}
+.donut svg{width:130px;height:130px;flex:none;transform:rotate(-90deg)}
+.donut .mid{position:relative;flex:none}
+.donut .mid span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--mute);text-align:center}
+.legend{flex:1;min-width:0}
+.lg{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:14px;cursor:pointer;border:0;background:none;width:100%;text-align:left}
+.lg.sel{font-weight:700}
+.dot{width:12px;height:12px;border-radius:50%;flex:none}
+.lg .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg .p{color:var(--mute);font-size:12px}
+.bars{display:flex;align-items:flex-end;gap:8px;height:110px}
+.bars .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end}
+.bars .pair{display:flex;gap:3px;align-items:flex-end;flex:1;width:100%;justify-content:center}
+.bars .pair i{display:block;width:40%;border-radius:4px 4px 0 0;min-height:2px}
+.bars small{font-size:11px;color:var(--mute)}
+.bars .col.cur small{color:var(--text);font-weight:700}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1;padding:8px;border-radius:10px;border:1px solid var(--line);background:none;color:var(--mute);font-size:14px}
+.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+li .ic{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+li .t{flex:1;min-width:0}li .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+li .t small{color:var(--mute)}
+li button{background:none;border:0;color:var(--mute);font-size:18px;padding:6px}
+.empty{text-align:center;color:var(--mute);padding:26px 0}
+.fab{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom));width:60px;height:60px;border-radius:50%;border:0;background:var(--acc);color:#fff;font-size:32px;box-shadow:0 4px 14px #0006}
+dialog{border:0;border-radius:16px;background:var(--card);color:var(--text);width:min(92vw,420px);padding:18px}
+dialog::backdrop{background:#0009}
+form{display:grid;gap:10px}
+input,select{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:16px}
+input[type=color]{padding:2px;height:46px}
+input[type=checkbox]{width:auto}
+.chk{display:flex;align-items:center;gap:10px;font-size:15px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seg label{text-align:center;padding:10px;border-radius:10px;border:1px solid var(--line);cursor:pointer}
+.seg input{display:none}
+.seg label:has(input[value=in]:checked){background:var(--in);color:#fff;border-color:var(--in)}
+.seg label:has(input[value=out]:checked){background:var(--out);color:#fff;border-color:var(--out)}
+.row{display:flex;gap:8px}.row button{flex:1;padding:12px;border-radius:10px;border:0;font-size:16px}
+.ok{background:var(--acc);color:#fff}.no{background:var(--line)}
+.catform{display:grid;grid-template-columns:60px 1fr 56px;gap:8px;margin-bottom:8px}
+.catform select,.catform button{grid-column:1/-1}
+.foot{display:flex;gap:8px;margin-top:20px}
+.foot button{flex:1;padding:10px;border-radius:10px;border:1px solid var(--line);background:none;color:var(--mute);font-size:13px}
+.hint{color:var(--mute);font-size:13px;margin:0 0 12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav" id="nav">
+    <button data-v="month" class="on">Übersicht</button>
+    <button data-v="rec">Wiederkehrend</button>
+    <button data-v="cats">Kategorien</button>
+  </div>
+
+  <!-- Monatsansicht -->
+  <section id="v-month">
+    <div class="month">
+      <button id="prev" aria-label="Voriger Monat">‹</button>
+      <h1 id="mlabel"></h1>
+      <button id="next" aria-label="Nächster Monat">›</button>
+    </div>
+    <div class="sum">
+      <div class="card"><small>Einnahmen</small><b class="in" id="sIn"></b></div>
+      <div class="card"><small>Ausgaben</small><b class="out" id="sOut"></b></div>
+    </div>
+    <div class="card bal"><small>Saldo</small><b id="sBal"></b></div>
+    <div class="card" id="donutCard"><h2>Ausgaben nach Kategorie</h2><div class="donut" id="donut"></div></div>
+    <div class="card"><h2>Letzte 6 Monate</h2><div class="bars" id="bars"></div></div>
+    <div class="tabs">
+      <button data-f="all" class="on">Alle</button>
+      <button data-f="in">Einnahmen</button>
+      <button data-f="out">Ausgaben</button>
+    </div>
+    <ul id="list"></ul>
+    <div class="foot">
+      <button id="exp">Export (Backup)</button>
+      <button id="imp">Import</button>
+      <input type="file" id="file" accept="application/json" hidden>
+    </div>
+  </section>
+
+  <!-- Wiederkehrend -->
+  <section id="v-rec" class="hidden">
+    <p class="hint">Diese Buchungen werden jeden Monat automatisch eingetragen (z. B. Miete, Gehalt, Abos). Änderungen gelten ab dem aktuellen Monat.</p>
+    <div class="sum">
+      <div class="card"><small>Fixe Einnahmen / Monat</small><b class="in" id="rIn"></b></div>
+      <div class="card"><small>Fixe Ausgaben / Monat</small><b class="out" id="rOut"></b></div>
+    </div>
+    <ul id="recList"></ul>
+  </section>
+
+  <!-- Kategorien -->
+  <section id="v-cats" class="hidden">
+    <div class="card">
+      <h2>Neue Kategorie</h2>
+      <form class="catform" id="catForm">
+        <input name="icon" placeholder="😀" maxlength="2" aria-label="Symbol">
+        <input name="name" placeholder="Name (z. B. Haustier)" required maxlength="30">
+        <input name="color" type="color" value="#3b82f6" aria-label="Farbe">
+        <select name="type"><option value="out">Ausgabe</option><option value="in">Einnahme</option></select>
+        <button class="ok" style="padding:12px;border:0;border-radius:10px">Kategorie hinzufügen</button>
+      </form>
+    </div>
+    <h2 class="out" style="font-size:15px">Ausgaben-Kategorien</h2><ul id="catOut"></ul>
+    <h2 class="in" style="font-size:15px">Einnahmen-Kategorien</h2><ul id="catIn"></ul>
+  </section>
+</div>
+<button class="fab" id="add" aria-label="Neuer Eintrag">+</button>
+
+<dialog id="dlg">
+  <form id="form" method="dialog">
+    <div class="seg">
+      <label><input type="radio" name="type" value="out" checked><span>Ausgabe</span></label>
+      <label><input type="radio" name="type" value="in"><span>Einnahme</span></label>
+    </div>
+    <input name="title" placeholder="Bezeichnung (z. B. Miete)" required maxlength="60">
+    <input name="amount" type="number" inputmode="decimal" step="0.01" min="0.01" placeholder="Betrag in €" required>
+    <input name="date" type="date" required>
+    <select name="cat"></select>
+    <label class="chk"><input type="checkbox" name="rec"> <span id="recLabel">Jeden Monat wiederholen</span></label>
+    <div class="row"><button type="button" class="no" id="cancel">Abbrechen</button><button class="ok">Speichern</button></div>
+  </form>
+</dialog>
+
+<script>
+const KEY = 'budget.db.v2', OLD = 'budget.entries.v1';
+const DEF = {
+  out: [['🏠','Miete','#3b82f6'],['🛒','Lebensmittel','#22c55e'],['🚗','Mobilität','#f59e0b'],['🎉','Freizeit','#a855f7'],['🛡️','Versicherung','#06b6d4'],['📺','Abos','#ec4899'],['💊','Gesundheit','#ef4444'],['📦','Sonstiges','#94a3b8']],
+  in: [['💼','Gehalt','#22c55e'],['💸','Nebenverdienst','#84cc16'],['🎁','Geschenk','#f59e0b'],['📦','Sonstiges','#94a3b8']]
+};
+const mk = a => a.map(([icon,name,color]) => ({icon,name,color}));
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+const eur = n => n.toLocaleString('de-DE',{style:'currency',currency:'EUR'});
+const pad = n => String(n).padStart(2,'0');
+const ymOf = d => d.getFullYear() + '-' + pad(d.getMonth()+1);
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+
+let db;
+try { db = JSON.parse(localStorage.getItem(KEY)); } catch(e) {}
+if (!db) {
+  db = { entries: [], cats: { out: mk(DEF.out), in: mk(DEF.in) }, rec: [] };
+  try { const o = JSON.parse(localStorage.getItem(OLD)); if (Array.isArray(o)) db.entries = o; } catch(e) {}
+}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch(e) { alert('Speichern nicht möglich'); } };
+const catOf = (type, name) => db.cats[type].find(c => c.name === name) || { icon:'❔', name, color:'#94a3b8' };
+
+let cur = new Date(); cur.setDate(1);
+let view = 'month', filter = 'all', catFilter = null, editId = null, editRec = null, recMode = false;
+
+/* Wiederkehrende Buchungen für einen Monat anlegen */
+function ensure(ym) {
+  let changed = false;
+  const [y, m] = ym.split('-').map(Number), last = new Date(y, m, 0).getDate();
+  for (const r of db.rec) {
+    if (ym < r.start || (r.end && ym > r.end) || r.skip.includes(ym)) continue;
+    if (db.entries.some(e => e.rec === r.id && e.date.startsWith(ym))) continue;
+    db.entries.push({ id: uid(), rec: r.id, type: r.type, title: r.title, amount: r.amount, cat: r.cat, date: ym + '-' + pad(Math.min(r.day, last)) });
+    changed = true;
+  }
+  if (changed) save();
+}
+
+function render() {
+  for (const v of ['month','rec','cats']) $('#v-' + v).classList.toggle('hidden', v !== view);
+  $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+  $('#add').classList.toggle('hidden', view === 'cats');
+  if (view === 'month') renderMonth(); else if (view === 'rec') renderRec(); else renderCats();
+}
+
+function renderMonth() {
+  const ym = ymOf(cur);
+  for (let i = 5; i >= 0; i--) ensure(ymOf(new Date(cur.getFullYear(), cur.getMonth() - i, 1)));
+  ensure(ym);
+  $('#mlabel').textContent = cur.toLocaleDateString('de-DE',{month:'long',year:'numeric'});
+  const all = db.entries.filter(e => e.date.startsWith(ym));
+  const sum = t => all.filter(e => e.type === t).reduce((s,e) => s + e.amount, 0);
+  const i = sum('in'), o = sum('out');
+  $('#sIn').textContent = eur(i); $('#sOut').textContent = eur(o);
+  const b = $('#sBal'); b.textContent = eur(i - o); b.className = i - o >= 0 ? 'in' : 'out';
+
+  // Ringdiagramm Ausgaben
+  const by = {};
+  all.filter(e => e.type === 'out').forEach(e => by[e.cat] = (by[e.cat] || 0) + e.amount);
+  const rows = Object.entries(by).sort((a,b) => b[1] - a[1]);
+  const dc = $('#donut'); dc.innerHTML = '';
+  $('#donutCard').classList.toggle('hidden', !rows.length);
+  if (rows.length) {
+    const R = 40, C = 2 * Math.PI * R; let off = 0, segs = '';
+    for (const [name, v] of rows) {
+      const len = v / o * C;
+      segs += `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${catOf('out',name).color}" stroke-width="18" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" opacity="${catFilter && catFilter !== name ? .3 : 1}"/>`;
+      off += len;
+    }
+    const mid = document.createElement('div'); mid.className = 'mid';
+    mid.innerHTML = `<svg viewBox="0 0 100 100">${segs}</svg><span>${rows.length} Kat.</span>`;
+    const lg = document.createElement('div'); lg.className = 'legend';
+    for (const [name, v] of rows) {
+      const c = catOf('out', name), btn = document.createElement('button');
+      btn.className = 'lg' + (catFilter === name ? ' sel' : '');
+      btn.innerHTML = '<i class="dot"></i><span class="n"></span><span></span><span class="p"></span>';
+      btn.children[0].style.background = c.color;
+      btn.children[1].textContent = c.icon + ' ' + name;
+      btn.children[2].textContent = eur(v);
+      btn.children[3].textContent = Math.round(v / o * 100) + '%';
+      btn.onclick = () => { catFilter = catFilter === name ? null : name; if (catFilter) filter = 'out'; syncTabs(); render(); };
+      lg.append(btn);
+    }
+    dc.append(mid, lg);
+  }
+
+  // Verlauf 6 Monate
+  const data = [];
+  for (let k = 5; k >= 0; k--) {
+    const d = new Date(cur.getFullYear(), cur.getMonth() - k, 1), key = ymOf(d);
+    const es = db.entries.filter(e => e.date.startsWith(key));
+    data.push({ d, key, i: es.filter(e => e.type === 'in').reduce((s,e) => s + e.amount, 0), o: es.filter(e => e.type === 'out').reduce((s,e) => s + e.amount, 0) });
+  }
+  const max = Math.max(1, ...data.map(x => Math.max(x.i, x.o)));
+  $('#bars').innerHTML = data.map(x => `<div class="col${x.key === ym ? ' cur' : ''}"><div class="pair"><i style="height:${x.i / max * 100}%;background:var(--in)"></i><i style="height:${x.o / max * 100}%;background:var(--out)"></i></div><small>${x.d.toLocaleDateString('de-DE',{month:'short'})}</small></div>`).join('');
+
+  // Liste
+  const ul = $('#list'); ul.innerHTML = '';
+  const vis = all.filter(e => (filter === 'all' || e.type === filter) && (!catFilter || e.cat === catFilter)).sort((a,b) => b.date.localeCompare(a.date));
+  if (catFilter) {
+    const li = document.createElement('div'); li.className = 'hint';
+    li.textContent = 'Filter: ' + catFilter + ' (zum Aufheben im Diagramm erneut tippen)'; ul.append(li);
+  }
+  if (!vis.length) { ul.insertAdjacentHTML('beforeend', '<div class="empty">Keine Einträge</div>'); return; }
+  for (const e of vis) ul.append(entryRow(e, true));
+}
+
+function entryRow(e, withDate) {
+  const c = catOf(e.type, e.cat), li = document.createElement('li');
+  const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = c.icon; ic.style.background = c.color + '33';
+  const t = document.createElement('div'); t.className = 't';
+  const a = document.createElement('div'); a.textContent = e.title;
+  const s = document.createElement('small');
+  s.textContent = (withDate ? new Date(e.date).toLocaleDateString('de-DE') + ' · ' : '') + e.cat + (e.rec ? ' · 🔁' : '');
+  t.append(a, s);
+  const amt = document.createElement('b'); amt.className = e.type;
+  amt.textContent = (e.type === 'in' ? '+' : '−') + eur(e.amount);
+  const ed = document.createElement('button'); ed.textContent = '✎'; ed.onclick = () => openDlg(e);
+  const del = document.createElement('button'); del.textContent = '🗑';
+  del.onclick = () => {
+    if (!confirm('„' + e.title + '“ löschen?' + (e.rec ? '\n(Nur dieser Monat, die Wiederholung bleibt aktiv.)' : ''))) return;
+    if (e.rec) { const r = db.rec.find(x => x.id === e.rec); if (r) r.skip.push(e.date.slice(0,7)); }
+    db.entries = db.entries.filter(x => x.id !== e.id); save(); render();
+  };
+  li.append(ic, t, amt, ed, del); return li;
+}
+
+function renderRec() {
+  const ul = $('#recList'); ul.innerHTML = '';
+  const tot = t => db.rec.filter(r => r.type === t).reduce((s,r) => s + r.amount, 0);
+  $('#rIn').textContent = eur(tot('in')); $('#rOut').textContent = eur(tot('out'));
+  if (!db.rec.length) { ul.innerHTML = '<div class="empty">Noch keine wiederkehrenden Buchungen.<br>Tippe auf +.</div>'; return; }
+  for (const r of [...db.rec].sort((a,b) => a.day - b.day)) {
+    const c = catOf(r.type, r.cat), li = document.createElement('li');
+    const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = c.icon; ic.style.background = c.color + '33';
+    const t = document.createElement('div'); t.className = 't';
+    const a = document.createElement('div'); a.textContent = r.title;
+    const s = document.createElement('small'); s.textContent = `am ${r.day}. jeden Monat · ${r.cat}`;
+    t.append(a, s);
+    const amt = document.createElement('b'); amt.className = r.type; amt.textContent = (r.type === 'in' ? '+' : '−') + eur(r.amount);
+    const ed = document.createElement('button'); ed.textContent = '✎'; ed.onclick = () => openDlg(null, r);
+    const del = document.createElement('button'); del.textContent = '🗑';
+    del.onclick = () => {
+      if (!confirm('„' + r.title + '“ nicht mehr wiederholen?\nKünftige Monate werden entfernt, vergangene bleiben erhalten.')) return;
+      const now = ymOf(new Date());
+      db.entries = db.entries.filter(e => !(e.rec === r.id && e.date.slice(0,7) > now));
+      db.entries.forEach(e => { if (e.rec === r.id) delete e.rec; });
+      db.rec = db.rec.filter(x => x.id !== r.id); save(); render();
+    };
+    li.append(ic, t, amt, ed, del); ul.append(li);
+  }
+}
+
+function renderCats() {
+  for (const type of ['out','in']) {
+    const ul = $(type === 'out' ? '#catOut' : '#catIn'); ul.innerHTML = '';
+    for (const c of db.cats[type]) {
+      const li = document.createElement('li');
+      const ic = document.createElement('div'); ic.className = 'ic'; ic.textContent = c.icon; ic.style.background = c.color + '33';
+      const t = document.createElement('div'); t.className = 't'; t.textContent = c.name;
+      const n = db.entries.filter(e => e.type === type && e.cat === c.name).length;
+      const s = document.createElement('small'); s.textContent = n + ' Einträge'; t.append(s);
+      const del = document.createElement('button'); del.textContent = '🗑';
+      del.onclick = () => {
+        if (db.cats[type].length < 2) return alert('Mindestens eine Kategorie muss bleiben.');
+        if (!confirm('Kategorie „' + c.name + '“ löschen?' + (n ? '\nBestehende Einträge behalten den Namen.' : ''))) return;
+        db.cats[type] = db.cats[type].filter(x => x !== c); save(); render();
+      };
+      li.append(ic, t, del); ul.append(li);
+    }
+  }
+}
+$('#catForm').onsubmit = ev => {
+  ev.preventDefault();
+  const f = ev.target, name = f.name.value.trim();
+  if (db.cats[f.type.value].some(c => c.name.toLowerCase() === name.toLowerCase())) return alert('Kategorie existiert schon.');
+  db.cats[f.type.value].push({ icon: f.icon.value.trim() || '🏷️', name, color: f.color.value });
+  save(); f.reset(); render();
+};
+
+/* Dialog */
+function fillCats(type, sel) {
+  const s = $('select[name=cat]');
+  s.innerHTML = '';
+  db.cats[type].forEach(c => s.add(new Option(c.icon + ' ' + c.name, c.name)));
+  if (sel && !db.cats[type].some(c => c.name === sel)) s.add(new Option(sel, sel));
+  if (sel) s.value = sel;
+}
+$$('input[name=type]').forEach(r => r.onchange = () => fillCats(r.value));
+
+function openDlg(e, r) {
+  const f = $('#form'); f.reset();
+  editId = e ? e.id : null; editRec = r || null;
+  recMode = !!r || (!e && view === 'rec');
+  const src = e || r;
+  const type = src ? src.type : 'out';
+  f.type.value = type; fillCats(type, src && src.cat);
+  f.rec.checked = recMode || !!(e && e.rec);
+  f.rec.disabled = recMode;
+  $('#recLabel').textContent = recMode ? 'Wiederkehrend (jeden Monat)' : 'Jeden Monat wiederholen';
+  if (src) { f.title.value = src.title; f.amount.value = src.amount; }
+  if (e) f.date.value = e.date;
+  else if (r) f.date.value = ymOf(new Date()) + '-' + pad(Math.min(r.day, 28));
+  else { const t = new Date(); f.date.value = ymOf(cur) === ymOf(t) ? t.toISOString().slice(0,10) : ymOf(cur) + '-01'; }
+  $('#dlg').showModal();
+}
+$('#add').onclick = () => openDlg();
+$('#cancel').onclick = () => $('#dlg').close();
+$('#form').onsubmit = ev => {
+  const f = ev.target;
+  const data = { type: f.type.value, title: f.title.value.trim(), amount: Math.round(parseFloat(f.amount.value) * 100) / 100, cat: f.cat.value };
+  const date = f.date.value, ym = date.slice(0,7), day = Number(date.slice(8,10));
+  if (editRec) {
+    Object.assign(editRec, data, { day });
+    const now = ymOf(new Date());
+    db.entries.forEach(e => {
+      if (e.rec !== editRec.id || e.date.slice(0,7) < now) return;
+      const [y, m] = e.date.split('-').map(Number);
+      Object.assign(e, data, { date: e.date.slice(0,8) + pad(Math.min(day, new Date(y, m, 0).getDate())) });
+    });
+  } else {
+    let entry;
+    if (editId) { entry = db.entries.find(x => x.id === editId); Object.assign(entry, data, { date }); }
+    else { entry = { id: uid(), ...data, date }; db.entries.push(entry); }
+    if (f.rec.checked && !entry.rec) {
+      const r = { id: uid(), ...data, day, start: ym, skip: [] };
+      db.rec.push(r); entry.rec = r.id;
+    } else if (!f.rec.checked && entry.rec) {
+      const r = db.rec.find(x => x.id === entry.rec);
+      if (r) r.skip.push(entry.date.slice(0,7));
+      delete entry.rec;
+    }
+    if (view === 'month') cur = new Date(Number(ym.slice(0,4)), Number(ym.slice(5)) - 1, 1);
+  }
+  save(); render();
+};
+
+/* Navigation */
+const maxMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 12); return ymOf(d); };
+$('#prev').onclick = () => { cur.setMonth(cur.getMonth() - 1); render(); };
+$('#next').onclick = () => { if (ymOf(cur) >= maxMonth()) return; cur.setMonth(cur.getMonth() + 1); render(); };
+$$('#nav button').forEach(b => b.onclick = () => { view = b.dataset.v; render(); });
+function syncTabs() { $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.f === filter)); }
+$$('.tabs button').forEach(b => b.onclick = () => { filter = b.dataset.f; catFilter = null; syncTabs(); render(); });
+
+/* Backup */
+$('#exp').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], {type:'application/json'}));
+  a.download = 'haushaltsbuch-' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+};
+$('#imp').onclick = () => $('#file').click();
+$('#file').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    let d = JSON.parse(await f.text());
+    if (Array.isArray(d)) d = { entries: d, cats: { out: mk(DEF.out), in: mk(DEF.in) }, rec: [] };
+    if (!Array.isArray(d.entries) || !Array.isArray(d.rec) || !d.cats || !Array.isArray(d.cats.out) || !Array.isArray(d.cats.in)
+        || !d.entries.every(x => x.id && /^\d{4}-\d{2}-\d{2}$/.test(x.date) && x.amount > 0 && (x.type === 'in' || x.type === 'out'))) throw 0;
+    if (confirm(d.entries.length + ' Einträge importieren? Bestehende Daten werden ersetzt.')) { db = d; save(); render(); }
+  } catch { alert('Ungültige Datei'); }
+  e.target.value = '';
+};
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+render();
+</script>
+</body>
+</html>
