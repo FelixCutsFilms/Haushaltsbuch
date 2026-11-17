@@ -644,7 +644,7 @@ function loadTesseract() {
 }
 async function newWorker(logger) {
   await loadTesseract();
-  return Tesseract.createWorker('deu', 1, { workerPath: abs('vendor/tesseract/worker.min.js'), corePath: abs('vendor/tesseract/core'), langPath: abs('vendor/tesseract/lang'), logger: logger || (() => {}) });
+  return Tesseract.createWorker('deu', 1, { workerPath: abs('vendor/tesseract/worker.min.js'), corePath: abs('vendor/tesseract/core'), langPath: abs('vendor/tesseract/lang'), gzip: false, logger: logger || (() => {}) });
 }
 async function prepImage(file, o) {
   o = o || {};
