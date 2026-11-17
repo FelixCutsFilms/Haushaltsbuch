@@ -112,6 +112,7 @@ input[type=checkbox]{width:auto}
       <div class="card"><small>Ausgaben</small><b class="out" id="sOut"></b></div>
     </div>
     <div class="card bal"><small>Saldo</small><b id="sBal"></b></div>
+    <div class="card hidden" id="backupBanner" style="border:1px solid #f59e0b"><p id="backupText" style="margin:0 0 8px"></p><button type="button" class="ok" id="backupNow" style="padding:10px 14px;border:0;border-radius:10px">Jetzt Backup erstellen</button></div>
     <p class="scanmsg hidden" id="impMsg" role="status" style="margin-bottom:10px"></p>
     <div class="card" id="donutCard"><h2>Ausgaben nach Kategorie</h2><div class="donut" id="donut"></div></div>
     <div class="card"><h2>Letzte 6 Monate</h2><div class="bars" id="bars"></div></div>
@@ -122,8 +123,8 @@ input[type=checkbox]{width:auto}
     </div>
     <ul id="list"></ul>
     <div class="foot">
-      <button id="exp">Export (Backup)</button>
-      <button id="imp">Import</button>
+      <button id="exp">Backup erstellen</button>
+      <button id="imp">Backup einspielen</button>
       <input type="file" id="file" accept="application/json" hidden>
     </div>
   </section>
@@ -235,6 +236,7 @@ function render() {
 }
 
 function renderMonth() {
+  renderBackupBanner();
   const ym = ymOf(cur);
   for (let i = 5; i >= 0; i--) ensure(ymOf(new Date(cur.getFullYear(), cur.getMonth() - i, 1)));
   ensure(ym);
@@ -477,8 +479,8 @@ function guessCat(text, names) {
   for (const [name, words] of Object.entries(STORE_KEYS)) if (names.includes(name) && words.some(w => low.includes(w))) return name;
   return null;
 }
-const AMT_END = /([−–—+~-])?\s?(\d{1,3}(?:[. ]\d{3})*|\d+),(\d{2})\s?(?:€|EUR)?[\s|>)\].]*$/;
-const AMT_NOCOMMA = /([−–—+~-])\s?(\d{3,6})\s?€[\s|>)\].]*$/;
+const AMT_END = /([−–—+~_-])?\s?(?<![\d.,])(\d{1,3}(?:[. ]\d{3})*|\d+)[,.](\d{2})\s?(?:[€©]|EUR)?[\s|>)\].]*$/;
+const AMT_NOCOMMA = /([−–—+~_-])\s?(\d{3,6})\s?[€©][\s|>)\].]*$/;
 const DATE_ANY = /(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?!\d)/;
 const META = /vorgemerkt|kartenzahlung|lastschrift|überweisung|ueberweisung|gutschrift|dauerauftrag|umsatz/i;
 function isoOf(m) {
@@ -488,7 +490,7 @@ function isoOf(m) {
 /* Logo-Müll, Status- und Datumstexte aus einem Namen entfernen */
 const KEEP_SHORT = ['dm', 'tk', 'hm', 'h&m'];
 function cleanName(raw) {
-  let t = raw.replace(DATE_ANY, ' ').replace(new RegExp(META.source, 'gi'), ' ').replace(/\bSUM\b/g, ' ').replace(/\s+/g, ' ').trim();
+  let t = raw.replace(/(^|\s)[−–—_+~-]?\d{1,3}(?:[.,]\d{2,3})+\S*/g, ' ').replace(DATE_ANY, ' ').replace(new RegExp(META.source, 'gi'), ' ').replace(/\bSUM\b/g, ' ').replace(/\s+/g, ' ').trim();
   let toks = t.split(' ');
   const letters = x => (x.match(/\p{L}/gu) || []).length;
   for (;;) {
@@ -501,7 +503,7 @@ function cleanName(raw) {
     if (!junk) break;
     toks.shift();
   }
-  t = toks.join(' ').replace(/^[^\p{L}\d]+/u, '').replace(/[\s·|>\-–−_]+$/u, '').replace(/^(\p{L}+)\s+\1\b/iu, '$1');
+  t = toks.join(' ').replace(/^[^\p{L}\d]+/u, '').replace(/[\s·|>\-–−—_]+$/u, '').replace(/^(\p{L}+)\s+\1\b/iu, '$1');
   return t.slice(0, 40);
 }
 function lev(a, b) {
@@ -540,57 +542,117 @@ function mergeRows(passes) {
     const tc = new Map(); g.items.forEach(r => tc.set(r.title, (tc.get(r.title) || 0) + 1));
     const title = [...tc.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
     const [date] = vote(g.items.filter(r => r.date), r => r.date);
-    return { title, amount, type, date: date || g.date, uncertain: passes.length > 1 && ac < 2 };
+    const ys = g.items.filter(r => r.y != null).map(r => r.y);
+    return { title, amount, type, date: date || g.date, uncertain: passes.length > 1 && ac < 2, y: ys.length ? ys.reduce((a, b) => a + b, 0) / ys.length : null };
   }).filter(r => r.amount > 0);
 }
-/* Liste aus Bank-Screenshot: Zeilen mit Betrag am Zeilenende = eine Buchung */
-function parseList(text) {
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+/* Liste aus Bank-Screenshot: Zeilen mit Betrag am Zeilenende = eine Buchung.
+   Eingabe: Zeilen mit Höhe y (0..1 im Bild), Ausgabe: Buchungen plus Namens- und Datumszeilen für die Zuordnung per Position. */
+function matchAmount(l) {
+  let m = l.match(AMT_END);
+  if (!m) { const n = l.match(AMT_NOCOMMA); if (n) m = Object.assign([n[0], n[1], n[2].slice(0, -2), n[2].slice(-2)], { index: n.index }); }
+  return m;
+}
+function parseLines(inLines) {
+  const lines = inLines.map(l => ({ t: l.text.trim(), y: l.y })).filter(l => l.t);
   const hits = [];
-  lines.forEach((l, i) => {
-    if (/^\d{1,2}\.\d{1,2}\./.test(l)) return;
-    let m = l.match(AMT_END);
-    if (!m) { const n = l.match(AMT_NOCOMMA); if (n) m = Object.assign([n[0], n[1], n[2].slice(0, -2), n[2].slice(-2)], { index: n.index }); }
-    if (m) hits.push({ i, m });
-  });
-  const rows = []; let lastDate = null;
+  lines.forEach((l, i) => { if (/^\d{1,2}\.\d{1,2}\./.test(l.t)) return; const m = matchAmount(l.t); if (m) hits.push({ i, m }); });
+  const rows = [], names = [], dates = []; let lastDate = null;
+  const hasLetters = (s, n) => (s.match(/\p{L}/gu) || []).length >= (n || 2);
   hits.forEach((h, k) => {
-    const l = lines[h.i], end = k + 1 < hits.length ? hits[k + 1].i : lines.length;
-    const hasLetters = s => (s.match(/\p{L}/gu) || []).length >= 2;
-    let name = cleanName(l.slice(0, h.m.index));
+    const end = k + 1 < hits.length ? hits[k + 1].i : lines.length;
+    let name = cleanName(lines[h.i].t.slice(0, h.m.index));
     if (!hasLetters(name)) {
       name = '';
-      for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1); j--) { const c = cleanName(lines[j]); if (hasLetters(c)) { name = c; break; } }
+      for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1); j--) { const c = cleanName(lines[j].t); if (hasLetters(c)) { name = c; break; } }
     }
     let date = null;
-    for (let j = h.i; j < end && !date; j++) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
-    for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1) && !date; j--) { const dm = lines[j].match(DATE_ANY); if (dm) date = isoOf(dm); }
+    for (let j = h.i; j < end && !date; j++) { const dm = lines[j].t.match(DATE_ANY); if (dm) date = isoOf(dm); }
+    for (let j = h.i - 1; j > (k ? hits[k - 1].i : -1) && !date; j--) { const dm = lines[j].t.match(DATE_ANY); if (dm) date = isoOf(dm); }
     if (date) lastDate = date; else date = lastDate;
     const sign = h.m[1], amount = parseFloat(h.m[2].replace(/[. ]/g, '') + '.' + h.m[3]);
     if (!(amount > 0)) return;
-    rows.push({ title: name || 'Unbekannt', amount, type: sign === '+' ? 'in' : 'out', date });
+    rows.push({ title: name || 'Unbekannt', amount, type: sign === '+' ? 'in' : 'out', signed: !!sign, date, y: lines[h.i].y });
   });
-  return rows;
+  lines.forEach(l => {
+    const m = matchAmount(l.t), c = cleanName(m ? l.t.slice(0, m.index) : l.t);
+    if (hasLetters(c, 3)) names.push({ text: c, y: l.y });
+    const dm = l.t.match(DATE_ANY); if (dm && isoOf(dm)) dates.push({ iso: isoOf(dm), y: l.y });
+  });
+  return { rows, names, dates };
+}
+function parseList(text) {
+  const a = text.split(/\r?\n/);
+  return parseLines(a.map((t, i) => ({ text: t, y: (i + .5) / a.length }))).rows;
+}
+/* Beträge-Spalte (nur rechter Bildrand, nur Ziffern erlaubt) */
+function parseAmountLines(inLines) {
+  const out = [];
+  for (const l of inLines) {
+    const m = matchAmount(l.text.trim()); if (!m) continue;
+    const amount = parseFloat(m[2].replace(/[. ]/g, '') + '.' + m[3]);
+    if (amount > 0) out.push({ amount, sign: m[1] ? (m[1] === '+' ? '+' : '-') : null, y: l.y });
+  }
+  return out;
+}
+/* Durchgänge + Beträge-Spalte zu Buchungen verbinden: Zeile = Betrag der Spalte, Name/Datum nach Position, Betrag per Abstimmung */
+function buildRows(passes, col) {
+  if (!col.length) return mergeRows(passes.map(p => p.rows));
+  const all = [...col.map(c => c.y), ...passes.flatMap(p => p.rows.map(r => r.y))].filter(y => y != null).sort((a, b) => a - b);
+  const centers = []; let grp = [];
+  for (const y of all) { if (grp.length && y - grp[grp.length - 1] > 0.03) { centers.push(grp.reduce((a, b) => a + b, 0) / grp.length); grp = []; } grp.push(y); }
+  if (grp.length) centers.push(grp.reduce((a, b) => a + b, 0) / grp.length);
+  let pitch = 0.06;
+  if (centers.length > 1) pitch = Math.min(...centers.slice(1).map((y, i) => y - centers[i]));
+  const tol = Math.min(0.12, Math.max(0.02, pitch * 0.5));
+  const near = (arr, y) => { let b = null, bd = 9; for (const x of arr) { const dd = Math.abs(x.y - y); if (dd < bd) { bd = dd; b = x; } } return bd <= tol ? b : null; };
+  const top = (m, pref) => { let b = null, bw = -1; for (const [k, w] of m) if (w > bw || (w === bw && pref && pref(k, b))) { b = k; bw = w; } return [b, bw]; };
+  const out = []; let lastDate = null;
+  for (const c of col) {
+    const nm = new Map(), am = new Map([[c.amount, 1.5]]), tm = new Map(), dm = new Map();
+    if (c.sign) tm.set(c.sign === '+' ? 'in' : 'out', 1.5);
+    for (const ps of passes) {
+      for (const n of ps.names) if (Math.abs(n.y - c.y) <= tol) nm.set(n.text, (nm.get(n.text) || 0) + 1);
+      const d = near(ps.dates, c.y); if (d) dm.set(d.iso, (dm.get(d.iso) || 0) + 1);
+      const r = near(ps.rows, c.y);
+      if (r) { am.set(r.amount, (am.get(r.amount) || 0) + 1); if (r.signed) tm.set(r.type, (tm.get(r.type) || 0) + 1); }
+    }
+    const nn = t => t.toLowerCase().replace(/[^\p{L}\d]/gu, '');
+    const support = k => [...nm].reduce((a, [d, w]) => a + (nn(d) === nn(k) || (nn(d).length >= 4 && nn(k).length >= 4 && (nn(d).endsWith(nn(k)) || nn(k).endsWith(nn(d)))) ? w : 0), 0);
+    const title = [...nm.keys()].sort((a, b) => support(b) - support(a) || nm.get(b) - nm.get(a) || a.length - b.length)[0];
+    const [amount, aw] = top(am), [type] = top(tm), [date] = top(dm);
+    if (date) lastDate = date;
+    out.push({ title: title || 'Unbekannt', amount, type: type || 'out', date: date || lastDate, uncertain: aw < 2.5 || !title, y: c.y });
+  }
+  // Zeilen, die nur die Volltext-Durchgänge gefunden haben (andere Spalte, anderes Layout)
+  for (const r of mergeRows(passes.map(p => p.rows))) if (r.y == null || !near(col, r.y)) out.push({ ...r, uncertain: true });
+  return out.sort((a, b) => (a.y == null) - (b.y == null) || a.y - b.y);
 }
 /*PARSE_END*/
 
 let tessLoading = null;
+const abs = p => new URL(p, location.href).href;
 function loadTesseract() {
   if (window.Tesseract) return Promise.resolve();
   if (!tessLoading) tessLoading = new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-    s.onload = res; s.onerror = () => { tessLoading = null; rej(new Error('Texterkennung konnte nicht geladen werden (Internet?)')); };
-    document.head.append(s);
+    const sc = document.createElement('script');
+    sc.src = 'vendor/tesseract/tesseract.min.js';
+    sc.onload = res; sc.onerror = () => { tessLoading = null; rej(new Error('Texterkennung konnte nicht geladen werden')); };
+    document.head.append(sc);
   });
   return tessLoading;
+}
+async function newWorker(logger) {
+  await loadTesseract();
+  return Tesseract.createWorker('deu', 1, { workerPath: abs('vendor/tesseract/worker.min.js'), corePath: abs('vendor/tesseract/core'), langPath: abs('vendor/tesseract/lang'), logger: logger || (() => {}) });
 }
 async function prepImage(file, o) {
   o = o || {};
   const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file));
-  const k = Math.min(o.scale || 1, 2400 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
-  const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  const sx = Math.floor(bmp.width * (o.crop || 0)), sw = bmp.width - sx;
+  const k = Math.min(o.scale || 1, 2400 / Math.max(sw, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(sw * k); c.height = Math.round(bmp.height * k);
+  const ctx = c.getContext('2d'); ctx.drawImage(bmp, sx, 0, sw, bmp.height, 0, 0, c.width, c.height);
   if (!o.raw) {
     const id = ctx.getImageData(0, 0, c.width, c.height), d = id.data, n = d.length / 4, g = new Uint8ClampedArray(n);
     let sum = 0;
@@ -599,16 +661,18 @@ async function prepImage(file, o) {
     for (let p = 0; p < n; p++) { let v = dark ? 255 - g[p] : g[p]; if (o.boost && !dark) v = (v - 128) * 1.4 + 128; d[4*p] = d[4*p+1] = d[4*p+2] = v; d[4*p+3] = 255; }
     ctx.putImageData(id, 0, 0);
   }
-  return new Promise(r => c.toBlob(r, 'image/png'));
+  const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+  blob.imgH = c.height;
+  return blob;
 }
 async function scanReceipt(file) {
   const msg = $('#scanMsg'), btns = [$('#scanCam'), $('#scanGal')];
   const say = t => { msg.textContent = t; msg.classList.remove('hidden'); };
   btns.forEach(b => b.disabled = true);
   try {
-    say('Lade Texterkennung …'); await loadTesseract();
+    say('Lade Texterkennung …'); const w = await newWorker(m => { if (m.status === 'recognizing text') say('Lese Beleg … ' + Math.round(m.progress * 100) + ' %'); });
     say('Bereite Bild vor …'); const img = await prepImage(file, { boost: true });
-    const { data } = await Tesseract.recognize(img, 'deu', { logger: m => { if (m.status === 'recognizing text') say('Lese Beleg … ' + Math.round(m.progress * 100) + ' %'); } });
+    const { data } = await w.recognize(img); await w.terminate();
     const f = $('#form');
     f.type.value = 'out'; fillCats('out');
     const r = parseReceipt(data.text, db.cats.out.map(c => c.name));
@@ -632,20 +696,28 @@ async function importScreenshots(files) {
   const btn = $('#impBtn'); btn.disabled = true;
   let rows = [], raw = '';
   try {
-    impSay('Lade Texterkennung …'); await loadTesseract();
+    impSay('Lade Texterkennung …');
     let cur_i = 0;
-    const w = await Tesseract.createWorker('deu', 1, { logger: () => {} });
+    const w = await newWorker();
     await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
     const PASSES = [{ scale: 1 }, { raw: true }, { scale: 1.25 }];
     for (const f of files) {
       cur_i++;
       const passes = [];
+      const toLines = (data, H) => data.lines && data.lines.length ? data.lines.map(l => ({ text: l.text, y: (l.bbox.y0 + l.bbox.y1) / 2 / H })) : data.text.split(/\r?\n/).map((t, i, a) => ({ text: t, y: (i + .5) / a.length }));
       for (let pi = 0; pi < PASSES.length; pi++) {
-        impSay('Bild ' + cur_i + '/' + files.length + ' · Durchgang ' + (pi + 1) + '/' + PASSES.length + ' …');
-        const { data } = await w.recognize(await prepImage(f, PASSES[pi]));
-        raw += '--- Durchgang ' + (pi + 1) + '\n' + data.text + '\n'; passes.push(parseList(data.text));
+        impSay('Bild ' + cur_i + '/' + files.length + ' · Durchgang ' + (pi + 1) + '/' + (PASSES.length + 1) + ' …');
+        const blob = await prepImage(f, PASSES[pi]);
+        const { data } = await w.recognize(blob);
+        raw += '--- Durchgang ' + (pi + 1) + '\n' + data.text + '\n'; passes.push(parseLines(toLines(data, blob.imgH)));
       }
-      rows.push(...mergeRows(passes));
+      impSay('Bild ' + cur_i + '/' + files.length + ' · Beträge …');
+      await w.setParameters({ tessedit_char_whitelist: '0123456789,.-−–—+€ ' });
+      const cb = await prepImage(f, { crop: 0.6 });
+      const { data: cd } = await w.recognize(cb);
+      await w.setParameters({ tessedit_char_whitelist: '' });
+      raw += '--- Beträge\n' + cd.text + '\n';
+      rows.push(...buildRows(passes, parseAmountLines(toLines(cd, cb.imgH))));
     }
     await w.terminate();
     $('#impRaw').textContent = raw;
@@ -716,12 +788,31 @@ function syncTabs() { $$('.tabs button').forEach(x => x.classList.toggle('on', x
 $$('.tabs button').forEach(b => b.onclick = () => { filter = b.dataset.f; catFilter = null; syncTabs(); render(); });
 
 /* Backup */
-$('#exp').onclick = () => {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], {type:'application/json'}));
-  a.download = 'haushaltsbuch-' + new Date().toISOString().slice(0,10) + '.json';
-  a.click();
-};
+const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
+const META_KEY = 'budget.meta';
+const getMeta = () => { try { return JSON.parse(localStorage.getItem(META_KEY)) || {}; } catch (e) { return {}; } };
+const setMeta = o => { try { localStorage.setItem(META_KEY, JSON.stringify({ ...getMeta(), ...o })); } catch (e) {} };
+async function makeBackup() {
+  const json = JSON.stringify(db, null, 2), name = 'haushaltsbuch-' + new Date().toISOString().slice(0, 10) + '.json';
+  if (NATIVE && Capacitor.Plugins.Filesystem && Capacitor.Plugins.Share) {
+    const { uri } = await Capacitor.Plugins.Filesystem.writeFile({ path: name, data: json, directory: 'CACHE', encoding: 'utf8' });
+    await Capacitor.Plugins.Share.share({ title: 'Haushaltsbuch-Backup', text: 'Backup vom ' + new Date().toLocaleDateString('de-DE'), files: [uri], dialogTitle: 'Backup speichern unter …' });
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = name; a.click();
+  }
+  setMeta({ lastBackup: Date.now() }); renderBackupBanner();
+}
+function renderBackupBanner() {
+  const el = $('#backupBanner'); if (!el) return;
+  const last = getMeta().lastBackup, days = last ? Math.floor((Date.now() - last) / 864e5) : null;
+  const due = db.entries.length > 0 && (last == null || days >= 14);
+  el.classList.toggle('hidden', !due);
+  if (due) $('#backupText').textContent = last == null ? 'Du hast noch kein Backup gemacht. Sichere deine Daten, damit sie nicht verloren gehen.' : 'Dein letztes Backup ist ' + days + ' Tage alt.';
+}
+$('#backupNow').onclick = () => makeBackup().catch(e => { if (!/cancel/i.test(String(e && e.message || e))) alert('Backup fehlgeschlagen: ' + (e.message || e)); });
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+$('#exp').onclick = $('#backupNow').onclick;
 $('#imp').onclick = () => $('#file').click();
 $('#file').onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
@@ -735,7 +826,7 @@ $('#file').onchange = async e => {
   e.target.value = '';
 };
 
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !NATIVE) {
   const had = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('sw.js').catch(() => {});
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (had) location.reload(); });

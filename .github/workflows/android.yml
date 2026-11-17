@@ -1,0 +1,61 @@
+name: Android-App bauen
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Web-App in das Android-Projekt kopieren
+        run: npx cap sync android
+
+      - name: APK bauen
+        working-directory: android
+        run: ./gradlew assembleRelease -Pvc=${{ github.run_number }} --no-daemon
+
+      - name: APK bereitstellen
+        run: cp android/app/build/outputs/apk/release/app-release.apk Haushaltsbuch.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Haushaltsbuch-apk
+          path: Haushaltsbuch.apk
+
+      - name: Als Download veröffentlichen (Release "latest")
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="Build ${{ github.run_number }} · Commit ${GITHUB_SHA::7}. APK herunterladen und installieren (Updates überschreiben die alte Version, die Daten bleiben erhalten)."
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --notes "$NOTES"
+          else
+            gh release create latest --target "$GITHUB_SHA" --title "Haushaltsbuch (neueste Version)" --notes "$NOTES"
+          fi
+          gh release upload latest Haushaltsbuch.apk --clobber
