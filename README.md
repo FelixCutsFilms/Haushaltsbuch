@@ -1,6 +1,6 @@
 # Haushaltsbuch
 
-Monatliche Einnahmen und Ausgaben erfassen: eigene Kategorien (Symbol + Farbe), wiederkehrende Buchungen, Auswertung (Ringdiagramm, 6-Monats-Verlauf), Beleg-Scan und Import mehrerer Buchungen aus Bank-Screenshots. Die Texterkennung (Tesseract) ist eingebaut und läuft offline auf dem Gerät. Alle Daten bleiben lokal auf dem Gerät.
+Monatliche Einnahmen und Ausgaben erfassen: eigene Kategorien (Symbol + Farbe), wiederkehrende Buchungen, Auswertung (Ringdiagramm, 6-Monats-Verlauf), Beleg-Scan sowie Import mehrerer Buchungen aus Bank-Screenshots und PDFs (Kontoauszüge, Rechnungen, Gehaltsabrechnungen, auch gescannt). Einnahmen und Ausgaben werden über Vorzeichen, Soll/Haben (S/H), Stichwörter und bei Screenshots über die Textfarbe (grün) unterschieden. Die Texterkennung (Tesseract) ist eingebaut und läuft offline auf dem Gerät. Alle Daten bleiben lokal auf dem Gerät.
 
 ## Als Android-App installieren (empfohlen)
 1. Auf der Seite **Releases** → „Haushaltsbuch (neueste Version)" die Datei `Haushaltsbuch.apk` herunterladen.
@@ -13,7 +13,7 @@ Die Daten liegen im geschützten App-Speicher. „Browserdaten löschen" betriff
 Die App liegt in `www/` und wird per GitHub Pages veröffentlicht. Lokal testen: `python3 -m http.server 8000 --directory www`.
 
 ## Aufbau
-- `www/` – die Web-App (eine HTML-Datei, kein Build nötig), `www/vendor/tesseract/` – gebündelte Texterkennung
+- `www/` – die Web-App (eine HTML-Datei, kein Build nötig), `www/vendor/tesseract/` – gebündelte Texterkennung, `www/vendor/pdfjs/` – PDF-Leser (pdf.js)
 - `android/` – Capacitor-Projekt, das `www/` in eine native Android-App einpackt
 - `.github/workflows/android.yml` – baut die APK und veröffentlicht sie im Release „latest"
 - `.github/workflows/pages.yml` – veröffentlicht die Web-Version
