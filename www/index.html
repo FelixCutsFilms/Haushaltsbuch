@@ -161,6 +161,7 @@ input[type=checkbox]{width:auto}
   <h2 style="font-size:17px;margin:0 0 4px">Gefundene Buchungen</h2>
   <p class="hint" id="impHint"></p>
   <details style="margin-bottom:10px"><summary class="hint" style="cursor:pointer">Erkannten Rohtext anzeigen</summary><pre id="impRaw" style="white-space:pre-wrap;font-size:12px;color:var(--mute)"></pre></details>
+  <details id="impDiagBox" class="hidden" style="margin-bottom:10px"><summary class="hint" style="cursor:pointer">Diagnose zum Teilen (ohne Zahlen und Namen)</summary><pre id="impDiag" style="white-space:pre-wrap;font-size:11px;color:var(--mute);max-height:200px;overflow:auto"></pre><button type="button" class="no" id="impDiagCopy" style="padding:8px 12px;border:0;border-radius:10px">Diagnose kopieren</button></details>
   <div id="impList"></div>
   <div class="row"><button type="button" class="no" id="impCancel">Abbrechen</button><button type="button" class="ok" id="impSave">Speichern</button></div>
 </dialog>
@@ -677,12 +678,12 @@ function groupItems(items, pageW) {
       segs.push({ start: text.length, x: it.x, w: it.w });
       text += it.s; prevEnd = it.x + it.w;
     }
-    return { text, segs, pageW };
+    return { text, segs, pageW, y: r.y };
   });
 }
 /* Kontoauszug: eine Buchung beginnt mit einem Datum, der Betrag steht in der Zeile (Vorzeichen, S/H oder Soll/Haben-Spalte) */
 const DATE_START = /^\s*(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?(?![\d,])/;
-const AMT_ST = /(?<![\d.,\p{L}])([+\-−–])?\s?(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})(?!\d)(?:\s?([+\-−–]|[SH](?![\p{L}\d])))?/gu;
+const AMT_ST = /(?<![\d.,\p{L}])([+\-−–])?\s?(?:[€$£]\s?)?(\d{1,3}(?:\.\d{3})+|\d+),(\d{2})(?!\d)(?:\s?([+\-−–]|(?:CR|DR|[SH])(?![\p{L}\d])))?/gu;
 const STOP_LINE = /^\s*(?:alter|neuer|anfangs|end|aktueller)?\s*(?:kontostand|saldo|übertrag|uebertrag|summe|seite\b|rechnungsabschluss|abschluss|buchungen\s+gesamt|umsätze\s+gesamt)/i;
 function stmtAmounts(line) {
   const out = []; const re = new RegExp(AMT_ST.source, 'gu'); let m;
@@ -704,9 +705,9 @@ function findCols(lines) {
 }
 function stmtTitle(full) {
   const noise = /(?<![\p{L}\d])(?:BIC|IBAN|SVWZ\+?|EREF\+?|MREF\+?|CRED\+?|KREF\+?|Mandatsref(?:erenz)?|Gläubiger-?ID|Glaeubiger-?ID|End-to-End(?:-Ref\.?)?|Kartenzahlung|girocard|Basislastschrift|Lastschrift|Überweisung|Ueberweisung|Dauerauftrag|Gutschrift|Abbuchung|Entgelt|Zahlungseingang|Echtzeitüberweisung|SEPA|Umsatz|Verwendungszweck|Buchungstext)(?![\p{L}\d])\.?:?/giu;
-  let t = full.replace(/(?<![\p{L}\d])(?:Mandatsref(?:erenz)?|Gläubiger-?ID|Glaeubiger-?ID|End-to-End(?:-Ref\.?)?|EREF\+?|MREF\+?|KREF\+?|CRED\+?|Kartennr\.?|Kundennr\.?|Rechnungsnr\.?)[:\s]*\S+/giu, ' ').replace(new RegExp(AMT_ST.source, 'gu'), ' ').replace(/(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?/g, ' ')
+  let t = full.replace(/(?<![\p{L}\d])(?:EREF|MREF|KREF|CRED|PURP|ABWA|ABWE)\+\S*/gu, ' ').replace(/(?<![\p{L}\d])SVWZ\+/gu, ' ').replace(/(?<![\p{L}\d])(?:Mandatsref(?:erenz)?|Gläubiger-?ID|Glaeubiger-?ID|End-to-End(?:-Ref\.?)?|Kartennr\.?|Kundennr\.?|Rechnungsnr\.?)[:\s]*\S+/giu, ' ').replace(new RegExp(AMT_ST.source, 'gu'), ' ').replace(/\d{4}-\d{2}-\d{2}/g, ' ').replace(/(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?/g, ' ')
     .replace(/\b[A-Z]{2}\d{2}(?:\s?\d{4}){3,6}\s?\d{0,2}\b/g, ' ').replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{12,30}\b/g, ' ').replace(noise, ' ')
-    .replace(/\s+/g, ' ').replace(/^[^\p{L}\d]+/u, '').replace(/[^\p{L}\d)]+$/u, '').trim();
+    .replace(/\s+/g, ' ').replace(/^[^\p{L}\d]+/u, '').replace(/^\d{1,3}\s+(?=\p{L})/u, '').replace(/[^\p{L}\d)]+$/u, '').trim();
   return t.slice(0, 40);
 }
 function parseStatement(lines, today) {
@@ -730,7 +731,7 @@ function parseStatement(lines, today) {
     const a = pool.length > 1 && !hasBal ? (pool.find(x => x.sign) || pool[0]) : pool[0];
     const full = [e.first, ...e.extra].map(l => l.text).join(' ');
     let type = null, uncertain = false;
-    if (a.sign) type = /^[+H]$/.test(a.sign) ? 'in' : 'out';
+    if (a.sign) type = /^(?:[+H]|CR)$/.test(a.sign) ? 'in' : 'out';
     else if (cols && a.xr != null) type = Math.abs(a.xr - cols.haben) < Math.abs(a.xr - cols.soll) ? 'in' : 'out';
     if (!type) { type = inferType(full); if (!type) { type = 'out'; uncertain = true; } }
     const dm = e.first.text.match(DATE_START); let d = +dm[1], mo = +dm[2], y = dm[3] ? +dm[3] : null;
@@ -741,6 +742,105 @@ function parseStatement(lines, today) {
     rows.push({ title: title || 'Unbekannt', amount: a.amount, type, date: y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0'), uncertain: uncertain || !title });
   }
   return rows;
+}
+
+/* Beträge mit Dezimalpunkt (1,234.56) in deutsche Schreibweise (1.234,56) umwandeln, wenn das Dokument überwiegend so schreibt */
+function normalizeDecimals(lines) {
+  const dot = /(?<![\d.,])([+\-−–]?\s?(?:[€$£]\s?)?)(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})(?![\d.])/g, comma = /(?<![\d.,])\d{1,3}(?:\.\d{3})*,\d{2}(?!\d)/g;
+  let nd = 0, nc = 0;
+  for (const l of lines) { nd += (l.text.match(dot) || []).length; nc += (l.text.match(comma) || []).length; }
+  if (nd < 3 || nd < 2 * nc) return lines;
+  return lines.map(l => ({ ...l, text: l.text.replace(dot, (m, pre, a, b) => pre + a.replace(/,/g, '.') + ',' + b) }));
+}
+/* Datum irgendwo im Text finden: 01.10.2026, 01.10.26, 01.10., 2026-10-01 */
+function findDates(text, year, today) {
+  today = today || new Date(); const out = [];
+  const re = /(?<!\d)(?:(\d{4})-(\d{2})-(\d{2})|(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})?)(?![\d,])/g; let m;
+  while ((m = re.exec(text))) {
+    let d, mo, y;
+    if (m[1]) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else { d = +m[4]; mo = +m[5]; y = m[6] ? +m[6] : null; if (y != null && y < 100) y += 2000; }
+    if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12)) continue;
+    if (y == null) { y = year || today.getFullYear(); if (new Date(y, mo - 1, d) - today > 62 * 864e5) y -= 1; }
+    if (y < 2000 || y > 2100) continue;
+    out.push({ iso: y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0'), idx: m.index });
+  }
+  return out;
+}
+function statementYear(lines, today) {
+  for (const l of lines.slice(0, 40)) { const m = l.text.match(/(?:^|[^\d])(20\d{2})(?!\d)/); if (m) return +m[1]; }
+  return (today || new Date()).getFullYear();
+}
+const HEADER_WORDS = /buchungstag|buchungsdatum|buchung\b|valuta|wertstellung|\bwert\b|verwendungszweck|vorgang|buchungstext|\bbetrag\b|\bsoll\b|\bhaben\b|\bsaldo\b|\bdatum\b|empfänger|auftraggeber|beschreibung|umsatzart|belegdatum/gi;
+const isHeaderLine = t => (t.match(HEADER_WORDS) || []).length >= 2;
+const isNoiseLine = t => STOP_LINE.test(t) || /seite\s+\d+\s*(?:von|\/)\s*\d+/i.test(t) || /^\s*kontoauszug\b/i.test(t) || isHeaderLine(t);
+const median = a => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
+/* Kontoauszug über die Betragsspalte: Jeder Betrag in der Spalte ist eine Buchung, Datum und Text kommen aus dem Zeilenblock drumherum */
+function parseByColumns(lines, today) {
+  today = today || new Date();
+  const year = statementYear(lines, today), cols = findCols(lines);
+  const hasBal = lines.slice(0, 150).some(l => /saldo|kontostand/i.test(l.text) && /soll|haben|betrag|buchungs|valuta|wert/i.test(l.text));
+  const amts = [];
+  lines.forEach((l, i) => {
+    if (!l.segs || l.y == null || STOP_LINE.test(l.text)) return;
+    for (const a of stmtAmounts(l)) if (a.xr != null && (!l.pageW || a.xr >= 0.4 * l.pageW)) amts.push({ ...a, i, y: l.y, page: l.page || 0 });
+  });
+  if (amts.length < 2) return [];
+  const xs = [...amts].sort((a, b) => a.xr - b.xr); let cl = [];
+  for (const a of xs) { const c = cl[cl.length - 1]; if (c && a.xr - c.max <= 6) { c.items.push(a); c.max = a.xr; } else cl.push({ items: [a], max: a.xr }); }
+  cl.forEach(c => c.x = c.items.reduce((s, a) => s + a.xr, 0) / c.items.length);
+  const maxN = Math.max(...cl.map(c => c.items.length));
+  cl = cl.filter(c => c.items.length >= Math.max(2, 0.3 * maxN));
+  let use = cl, colType = new Map();
+  if (cl.length > 1) {
+    const near = x => cl.reduce((b, c) => Math.abs(c.x - x) < Math.abs(b.x - x) ? c : b, cl[0]);
+    const lineHasBoth = new Set(), seen = new Map();
+    for (const c of cl) for (const a of c.items) { if (seen.has(a.i) && seen.get(a.i) !== c) lineHasBoth.add(a.i); seen.set(a.i, c); }
+    if (cols) { const a = near(cols.soll), b = near(cols.haben); use = a === b ? [a] : [a, b]; if (use.length === 2) { colType.set(a, 'out'); colType.set(b, 'in'); } }
+    else if (hasBal || lineHasBoth.size > 0.3 * seen.size) use = [cl[0]];
+    else { use = [...cl].sort((a, b) => b.items.length - a.items.length).slice(0, 2).sort((a, b) => a.x - b.x); colType.set(use[0], 'out'); colType.set(use[1], 'in'); }
+  }
+  const anchors = [];
+  for (const c of use) for (const a of c.items) anchors.push({ ...a, col: c });
+  // Je Seite: Zwischen zwei Beträgen wird beim größten Zeilenabstand getrennt (Text darüber/darunter/drumherum gehört zur Buchung)
+  const pages = [...new Set(lines.map(l => l.page || 0))], rows = []; let lastDate = null;
+  for (const pg of pages) {
+    const pl = lines.map((l, i) => ({ ...l, i })).filter(l => (l.page || 0) === pg && l.y != null).sort((a, b) => b.y - a.y);
+    if (!pl.length) continue;
+    const gaps = pl.slice(1).map((l, k) => pl[k].y - l.y).filter(g => g > 0.5), mg = median(gaps) || 12;
+    const posOf = new Map(pl.map((l, k) => [l.i, k]));
+    const ap = anchors.filter(a => a.page === pg && posOf.has(a.i)).map(a => ({ a, pos: posOf.get(a.i) })).sort((x, y) => x.pos - y.pos || x.a.col.x - y.a.col.x);
+    const ends = [], starts = [];
+    for (let k = 0; k < ap.length; k++) {
+      const p0 = ap[k].pos;
+      let end = p0;
+      if (k === ap.length - 1) { let n = 0; while (end + 1 < pl.length && n < 3 && pl[end].y - pl[end + 1].y <= mg * 2.6 + 0.5 && !isNoiseLine(pl[end + 1].text)) { end++; n++; } }
+      else if (ap[k + 1].pos > p0) {
+        const p1 = ap[k + 1].pos, mid = (p0 + p1) / 2; let bg = -1;
+        for (let j = p0; j < p1; j++) { const g = pl[j].y - pl[j + 1].y; if (g > bg + 0.5 || (Math.abs(g - bg) <= 0.5 && Math.abs(j + 0.5 - mid) < Math.abs(end + 0.5 - mid))) { bg = g; end = j; } }
+      }
+      ends.push(end);
+      let st;
+      if (k > 0 && p0 === ap[k - 1].pos) st = starts[k - 1];
+      else if (k > 0) st = ends[k - 1] + 1;
+      else { st = p0; let n = 0; while (st - 1 >= 0 && n < 3 && pl[st - 1].y - pl[st].y <= mg * 2.6 + 0.5 && !isHeaderLine(pl[st - 1].text) && !isNoiseLine(pl[st - 1].text)) { st--; n++; } }
+      starts.push(st);
+    }
+    ap.forEach(({ a }, k) => {
+      const ls = pl.slice(starts[k], ends[k] + 1);
+      const body = ls.filter(l => !isNoiseLine(l.text));
+      const full = body.map(l => l.text).join(' ');
+      let date = null; for (const l of body) { const d = findDates(l.text, year, today)[0]; if (d) { date = d.iso; break; } }
+      if (date) lastDate = date; else date = lastDate;
+      let type = null, uncertain = false;
+      if (a.sign) type = /^(?:[+H]|CR)$/.test(a.sign) ? 'in' : 'out';
+      else if (colType.has(a.col)) type = colType.get(a.col);
+      if (!type) { type = inferType(full); if (!type) { type = 'out'; uncertain = true; } }
+      const title = stmtTitle(full);
+      rows.push({ title: title || 'Unbekannt', amount: a.amount, type, date: date || null, uncertain: uncertain || !title || !date, y: a.y, page: pg });
+    });
+  }
+  return rows.filter(r => r.date).length >= 0.7 * rows.length ? rows : [];
 }
 /* Einzelnes Dokument (Rechnung, Beleg, Gehaltsabrechnung) */
 function parseDocument(lines, outCats) {
@@ -767,6 +867,20 @@ function parseDocument(lines, outCats) {
   const first = lines.map(l => l.text.trim()).find(t => (t.match(/\p{L}/gu) || []).length >= 3 && !generic.test(t));
   const title = pay ? 'Gehalt' : (first ? first.replace(/^[^\p{L}\d]+/u, '').replace(/\s{2,}.*$/, '').slice(0, 40) : (r.title || 'Rechnung'));
   return { title, amount, type: pay || credit ? 'in' : 'out', date, uncertain: false };
+}
+
+/* Diagnose zum Teilen: Layout ohne Zahlen und Namen */
+const KEEP_WORDS = /^(?:buchung(?:stag|stext|sdatum|en)?|valuta|wert(?:stellung)?|datum|text|vorgang|verwendungszweck|betrag|soll|haben|saldo|kontostand|summe|übertrag|umsatz|umsätze|umsatzart|eur|euro|seite|von|kontoauszug|auszug|iban|bic|gutschrift|lastschrift|überweisung|kartenzahlung|dauerauftrag|entgelt|alter|neuer|empfänger|auftraggeber|beschreibung|belegdatum|nr|nummer|art|gesamt|cr|dr|s|h|abrechnung)$/i;
+function maskText(t) {
+  return t.replace(/\p{L}[\p{L}\d.\-+]*/gu, w => KEEP_WORDS.test(w) ? w : (w[0] === w[0].toUpperCase() ? 'X' : 'x') + 'x'.repeat(Math.min(w.length - 1, 12))).replace(/\d/g, '9');
+}
+function buildDiag(lines, info) {
+  const head = ['Haushaltsbuch-Diagnose (Zahlen und Namen maskiert)', info, '',
+    ...lines.slice(0, 90).map(l => {
+      const xs = l.segs ? stmtAmounts(l).map(a => Math.round(a.xr / 5) * 5).join(',') : '';
+      return (l.page ? 'S' + l.page + ' ' : '') + maskText(l.text) + (xs ? '   [Betrag-x: ' + xs + ']' : '');
+    })];
+  return head.join('\n');
 }
 /*PARSE_END*/
 
@@ -847,9 +961,10 @@ async function pdfLines(file, say, getWorker) {
     const page = await doc.getPage(n), vp = page.getViewport({ scale: 1 }), tc = await page.getTextContent();
     const items = tc.items.filter(i => i.str && i.str.trim()).map(i => ({ s: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: i.height || Math.abs(i.transform[3]) }));
     chars += items.reduce((a, i) => a + i.s.length, 0);
-    lines.push(...groupItems(items, vp.width));
+    lines.push(...groupItems(items, vp.width).map(l => ({ ...l, page: n })));
   }
-  if (chars >= 40) { doc.destroy(); return { lines, ocr: false }; }
+  const pages = doc.numPages;
+  if (chars >= 40) { doc.destroy(); return { lines, ocr: false, pages }; }
   // gescanntes PDF ohne Text: Seiten als Bild darstellen und per Texterkennung lesen
   const w = await getWorker(); lines = [];
   for (let n = 1; n <= doc.numPages; n++) {
@@ -858,16 +973,29 @@ async function pdfLines(file, say, getWorker) {
     const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
     await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
     const { data } = await w.recognize(await new Promise(r => c.toBlob(r, 'image/png')));
-    data.text.split(/\r?\n/).forEach(t => { if (t.trim()) lines.push({ text: t.trim(), pageW: 0 }); });
+    const items = (data.words || []).filter(w => w.text && w.text.trim()).map(w => ({ s: w.text, x: w.bbox.x0, y: c.height - (w.bbox.y0 + w.bbox.y1) / 2, w: w.bbox.x1 - w.bbox.x0, h: w.bbox.y1 - w.bbox.y0 }));
+    if (items.length) lines.push(...groupItems(items, c.width).map(l => ({ ...l, page: n })));
+    else data.text.split(/\r?\n/).forEach(t => { if (t.trim()) lines.push({ text: t.trim(), pageW: 0, page: n }); });
   }
-  doc.destroy(); return { lines, ocr: true };
+  doc.destroy(); return { lines, ocr: true, pages };
 }
 async function readPdf(file, say, getWorker) {
-  const { lines, ocr } = await pdfLines(file, say, getWorker);
-  let rows = parseStatement(lines);
-  if (rows.length < 2) { const d = parseDocument(lines, db.cats.out.map(c => c.name)); if (d) rows = [d]; }
+  const got = await pdfLines(file, say, getWorker), ocr = got.ocr, pages = got.pages, lines = normalizeDecimals(got.lines);
+  const text = lines.map(l => l.text).join('\n');
+  const strict = parseStatement(lines), byCol = parseByColumns(lines);
+  const good = rs => rs.filter(r => r.title !== 'Unbekannt' && r.date && !r.uncertain).length;
+  const useCol = byCol.length > strict.length || (byCol.length === strict.length && byCol.length > 0 && good(byCol) >= good(strict));
+  let rows = useCol ? byCol : strict, used = useCol ? 'Spaltenparser' : 'Zeilenparser', note = '';
+  if (rows.length < 2) {
+    const d = parseDocument(lines, db.cats.out.map(c => c.name));
+    if (d) {
+      rows = [d]; used = 'Einzeldokument';
+      if (pages > 1 || /kontoauszug|buchungstag|valuta|umsatzübersicht|umsätze/i.test(text)) { d.uncertain = true; note = 'Hinweis: Das PDF sieht nach einem Kontoauszug aus, es wurde aber nur eine Position erkannt. Bitte unten „Diagnose zum Teilen“ kopieren und mir schicken.'; }
+    }
+  }
   if (ocr) rows.forEach(r => r.uncertain = true);
-  return { rows, text: lines.map(l => l.text).join('\n') };
+  const diag = buildDiag(lines, 'PDF · ' + pages + ' Seiten · ' + lines.length + ' Textzeilen · ' + (ocr ? 'gescannt (OCR)' : 'mit Text') + ' · Zeilenparser ' + strict.length + ' · Spaltenparser ' + byCol.length + ' · verwendet: ' + used);
+  return { rows, text, diag, note };
 }
 async function readImage(f, say, w) {
   const PASSES = [{ scale: 1 }, { raw: true }, { scale: 1.25 }];
@@ -890,7 +1018,7 @@ async function readImage(f, say, w) {
 async function importFiles(files) {
   $('#dlg').close(); view = 'month'; render();
   const btn = $('#impBtn'); btn.disabled = true;
-  let rows = [], raw = '', worker = null;
+  let rows = [], raw = '', worker = null; const diags = []; let note = '';
   const getWorker = async () => {
     if (!worker) { impSay('Lade Texterkennung …'); worker = await newWorker(); await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); }
     return worker;
@@ -898,13 +1026,14 @@ async function importFiles(files) {
   try {
     for (const [fi, f] of files.entries()) {
       const say = t => impSay((files.length > 1 ? 'Datei ' + (fi + 1) + '/' + files.length + ' · ' : '') + t);
-      if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { const r = await readPdf(f, say, getWorker); rows.push(...r.rows); raw += '--- ' + f.name + '\n' + r.text + '\n'; }
+      if (/pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) { const r = await readPdf(f, say, getWorker); rows.push(...r.rows); raw += '--- ' + f.name + '\n' + r.text + '\n'; diags.push(r.diag); if (r.note) note = r.note; }
       else { const r = await readImage(f, say, await getWorker()); rows.push(...r.rows); raw += r.raw; }
     }
     if (worker) await worker.terminate();
     $('#impRaw').textContent = raw;
-    if (!rows.length) impSay('Keine Buchungen erkannt. Erkannter Text: ' + raw.replace(/\s+/g, ' ').slice(0, 200));
-    else { impSay(''); openImport(rows); }
+    $('#impDiag').textContent = diags.join('\n\n'); $('#impDiagBox').classList.toggle('hidden', !diags.length);
+    if (!rows.length && !diags.length) impSay('Keine Buchungen erkannt. Erkannter Text: ' + raw.replace(/\s+/g, ' ').slice(0, 200));
+    else { impSay(''); openImport(rows, note || (!rows.length ? 'Es wurden keine Buchungen erkannt. Bitte „Diagnose zum Teilen“ kopieren und mir schicken.' : '')); }
   } catch (e) { impSay('Import fehlgeschlagen: ' + (e.message || e)); }
   btn.disabled = false;
 }
@@ -921,7 +1050,7 @@ function guessFor(r) {
   const names = db.cats[r.type].map(c => c.name);
   return guessCat(r.title, names) || (names.includes('Sonstiges') ? 'Sonstiges' : names[0]);
 }
-function openImport(rows) {
+function openImport(rows, note) {
   const box = $('#impList'); box.innerHTML = ''; impRefs = [];
   const today = new Date().toISOString().slice(0, 10), seen = new Set(), known = [...new Set(db.entries.map(e => e.title))];
   for (const r of rows) {
@@ -941,10 +1070,16 @@ function openImport(rows) {
     box.append(d); impRefs.push({ d, q }); upd();
   }
   const nin = rows.filter(r => r.type === 'in').length;
-  $('#impHint').textContent = rows.length + ' Positionen erkannt (' + (rows.length - nin) + ' Ausgaben, ' + nin + ' Einnahmen). Bitte prüfen, Art und Kategorie korrigieren oder abhaken, was nicht dazugehört.';
+  $('#impHint').textContent = rows.length + ' Positionen erkannt (' + (rows.length - nin) + ' Ausgaben, ' + nin + ' Einnahmen). Bitte prüfen, Art und Kategorie korrigieren oder abhaken, was nicht dazugehört.' + (note ? ' ' + note : '');
   count(); $('#impDlg').showModal();
 }
 function count() { const n = impRefs.filter(x => x.q('.c').checked).length; $('#impSave').textContent = n + ' speichern'; $('#impSave').disabled = !n; }
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch (e) {}
+  const ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'; document.body.append(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); return ok;
+}
+$('#impDiagCopy').onclick = async () => { const b = $('#impDiagCopy'); b.textContent = (await copyText($('#impDiag').textContent)) ? 'Kopiert ✓' : 'Kopieren nicht möglich, bitte Text markieren'; };
 $('#impBtn').onclick = () => $('#impFile').click();
 $('#impFile').onchange = e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) importFiles(fs); };
 $('#impCancel').onclick = () => $('#impDlg').close();
